@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chore & Task Rotation Scheduler</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+        }
+    </style>
+</head>
+<body class="p-4 md:p-8 min-h-screen flex items-start justify-center">
+
+    <div id="app-container" class="w-full max-w-2xl bg-white shadow-2xl rounded-xl p-6 md:p-10 transition-all duration-300">
+        <header class="text-center mb-8">
+            <h1 class="text-3xl font-bold text-gray-800 mb-2">House Chore Rotation</h1>
+            <p class="text-gray-500">Assigns 6 people to 6 fixed 5-day periods (1st to 30th).</p>
+        </header>
+
+        <!-- Name Inputs Section -->
+        <div class="mb-8 p-5 bg-indigo-50 rounded-lg shadow-inner">
+            <h2 class="text-xl font-semibold text-indigo-700 mb-4 flex items-center">
+                <!-- Inline SVG for People Icon -->
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 mr-2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M18 18.72a4.5 4.5 0 0 0-.977-2.09L15 13.75l-4.72 2.09A4.5 4.5 0 0 0 9.977 18.72M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0ZM10.5 8.25a1.5 1.5 0 1 0-3 0 1.5 1.5 0 0 0 3 0Zm-1.5 4.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z" />
+                </svg>
+                The 6 Roommates
+            </h2>
+            <div id="names-grid" class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <!-- 6 dynamically generated inputs -->
+            </div>
+            <div id="error-message" class="mt-4 text-sm text-red-600 font-medium hidden">
+                Please enter a unique name for all 6 spots.
+            </div>
+        </div>
+
+        <!-- Action Button -->
+        <div class="flex justify-center mb-8">
+            <button id="assign-button" onclick="assignTasks()"
+                class="w-full sm:w-auto px-8 py-3 bg-indigo-600 text-white font-bold text-lg rounded-full shadow-lg hover:bg-indigo-700 active:bg-indigo-800 transition duration-150 ease-in-out transform hover:scale-[1.02] focus:outline-none focus:ring-4 focus:ring-indigo-300">
+                <span id="button-text">RANDOMIZE ASSIGNMENTS!</span>
+                <span id="loading-spinner" class="hidden h-5 w-5 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+            </button>
+        </div>
+
+        <!-- Results Section -->
+        <div id="results-container" class="mt-6">
+            <h2 class="text-2xl font-bold text-gray-800 mb-4 text-center hidden" id="results-title">Rotation Schedule</h2>
+            <div id="assignment-list" class="space-y-3">
+                <!-- Assignments will be injected here -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Array of the fixed date ranges for a 30-day month
+        const dateRanges = [
+            { range: "1st - 5th", color: "bg-green-100", border: "border-green-400" },
+            { range: "6th - 10th", color: "bg-yellow-100", border: "border-yellow-400" },
+            { range: "11th - 15th", color: "bg-red-100", border: "border-red-400" },
+            { range: "16th - 20th", color: "bg-blue-100", border: "border-blue-400" },
+            { range: "21st - 25th", color: "bg-purple-100", border: "border-purple-400" },
+            { range: "26th - 30th", color: "bg-indigo-100", border: "border-indigo-400" }
+        ];
+
+        const numPeople = 6;
+        const namesGrid = document.getElementById('names-grid');
+
+        /**
+         * Initializes the 6 name input fields on the page.
+         */
+        function initializeInputs() {
+            for (let i = 1; i <= numPeople; i++) {
+                namesGrid.innerHTML += `
+                    <div class="relative">
+                        <input type="text" id="name${i}" placeholder="Roommate ${i}"
+                            class="w-full p-3 border-2 border-indigo-300 rounded-lg focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition duration-150"
+                            value="">
+                    </div>
+                `;
+            }
+        }
+
+        /**
+         * Fisher-Yates (Knuth) Shuffle Algorithm
+         * @param {Array} array - The array to shuffle
+         * @returns {Array} - The shuffled array
+         */
+        function shuffle(array) {
+            let currentIndex = array.length, randomIndex;
+            let arrCopy = [...array]; // Create a copy to avoid modifying original array
+
+            // While there remain elements to shuffle.
+            while (currentIndex !== 0) {
+                // Pick a remaining element.
+                randomIndex = Math.floor(Math.random() * currentIndex);
+                currentIndex--;
+
+                // And swap it with the current element.
+                [arrCopy[currentIndex], arrCopy[randomIndex]] = [
+                    arrCopy[randomIndex], arrCopy[currentIndex]
+                ];
+            }
+
+            return arrCopy;
+        }
+
+        /**
+         * The main function to collect names, randomize, and display the assignments.
+         */
+        function assignTasks() {
+            const assignmentList = document.getElementById('assignment-list');
+            const errorMessage = document.getElementById('error-message');
+            const resultsTitle = document.getElementById('results-title');
+
+            // 1. Collect and validate names
+            let names = [];
+            for (let i = 1; i <= numPeople; i++) {
+                const name = document.getElementById(`name${i}`).value.trim();
+                if (name) {
+                    names.push(name);
+                }
+            }
+
+            // Check for exactly 6 names and no duplicates
+            const uniqueNames = new Set(names);
+            if (names.length !== numPeople || uniqueNames.size !== numPeople) {
+                assignmentList.innerHTML = '';
+                resultsTitle.classList.add('hidden');
+                errorMessage.classList.remove('hidden');
+                return;
+            }
+
+            errorMessage.classList.add('hidden');
+            resultsTitle.classList.remove('hidden');
+
+            // 2. Randomize the names
+            const shuffledNames = shuffle(names);
+
+            // 3. Create the assignments
+            let assignmentsHTML = '';
+            shuffledNames.forEach((name, index) => {
+                const period = dateRanges[index];
+                
+                // Card for each assignment
+                assignmentsHTML += `
+                    <div class="p-4 flex flex-col md:flex-row justify-between items-start md:items-center 
+                                rounded-xl border-l-4 ${period.border} ${period.color} shadow-md transition duration-300 hover:shadow-lg">
+                        
+                        <!-- Date Range (The Chore/Period) -->
+                        <div class="mb-2 md:mb-0">
+                            <p class="text-sm font-medium text-gray-500">Dates</p>
+                            <span class="text-xl font-bold text-gray-800">${period.range}</span>
+                        </div>
+
+                        <!-- Assigned Person -->
+                        <div class="text-right">
+                            <p class="text-sm font-medium text-gray-500">Assigned To</p>
+                            <span class="text-xl font-extrabold text-indigo-700">${name}</span>
+                        </div>
+                    </div>
+                `;
+            });
+
+            // 4. Display results
+            assignmentList.innerHTML = assignmentsHTML;
+
+            // Optional: Scroll to results
+            document.getElementById('results-container').scrollIntoView({ behavior: 'smooth' });
+        }
+
+        // Initialize inputs when the window loads
+        window.onload = initializeInputs;
+    </script>
+</body>
+</html>
