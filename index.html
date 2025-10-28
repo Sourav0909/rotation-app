@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Chore & Task Rotation Scheduler</title>
+    <title>Shared Rotation Tracker</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
     <style>
@@ -11,53 +11,566 @@
             font-family: 'Inter', sans-serif;
             background-color: #f3f4f6;
         }
+        .app-card {
+            min-height: 80vh;
+        }
+        /* Custom spinner utility */
+        .spinner {
+            border: 4px solid rgba(255, 255, 255, 0.3);
+            border-top: 4px solid #fff;
+            border-radius: 50%;
+            width: 1.5rem;
+            height: 1.5rem;
+            animation: spin 1s linear infinite;
+            display: inline-block;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
     </style>
 </head>
 <body class="p-4 md:p-8 min-h-screen flex items-start justify-center">
 
-    <div id="app-container" class="w-full max-w-2xl bg-white shadow-2xl rounded-xl p-6 md:p-10 transition-all duration-300">
+    <div id="app-container" class="w-full max-w-3xl bg-white shadow-2xl rounded-xl p-6 md:p-10 transition-all duration-300 app-card">
         <header class="text-center mb-8">
-            <h1 class="text-3xl font-bold text-gray-800 mb-2">House Chore Rotation</h1>
-            <p class="text-gray-500">Assigns 6 people to 6 fixed 5-day periods (1st to 30th).</p>
+            <h1 class="text-3xl font-bold text-indigo-700 mb-2">Bachelor House Rotation</h1>
+            <p class="text-gray-500" id="header-subtitle">Login to your shared House Account.</p>
         </header>
 
-        <!-- Name Inputs Section -->
-        <div class="mb-8 p-5 bg-indigo-50 rounded-lg shadow-inner">
-            <h2 class="text-xl font-semibold text-indigo-700 mb-4 flex items-center">
-                <!-- Inline SVG for People Icon -->
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 mr-2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M18 18.72a4.5 4.5 0 0 0-.977-2.09L15 13.75l-4.72 2.09A4.5 4.5 0 0 0 9.977 18.72M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0ZM10.5 8.25a1.5 1.5 0 1 0-3 0 1.5 1.5 0 0 0 3 0Zm-1.5 4.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z" />
-                </svg>
-                The 6 Roommates
-            </h2>
-            <div id="names-grid" class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <!-- 6 dynamically generated inputs -->
-            </div>
-            <div id="error-message" class="mt-4 text-sm text-red-600 font-medium hidden">
-                Please enter a unique name for all 6 spots.
-            </div>
+        <!-- Main Content Area -->
+        <div id="content-area">
+            <!-- Content will be swapped between Login and Main App -->
         </div>
 
-        <!-- Action Button -->
-        <div class="flex justify-center mb-8">
-            <button id="assign-button" onclick="assignTasks()"
-                class="w-full sm:w-auto px-8 py-3 bg-indigo-600 text-white font-bold text-lg rounded-full shadow-lg hover:bg-indigo-700 active:bg-indigo-800 transition duration-150 ease-in-out transform hover:scale-[1.02] focus:outline-none focus:ring-4 focus:ring-indigo-300">
-                <span id="button-text">RANDOMIZE ASSIGNMENTS!</span>
-                <span id="loading-spinner" class="hidden h-5 w-5 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
-            </button>
-        </div>
+        <div id="status-message" class="mt-6 p-3 text-sm rounded-lg text-center hidden"></div>
 
-        <!-- Results Section -->
-        <div id="results-container" class="mt-6">
-            <h2 class="text-2xl font-bold text-gray-800 mb-4 text-center hidden" id="results-title">Rotation Schedule</h2>
-            <div id="assignment-list" class="space-y-3">
-                <!-- Assignments will be injected here -->
-            </div>
-        </div>
     </div>
 
-    <script>
-        // Array of the fixed date ranges for a 30-day month
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { 
+            getFirestore, doc, setDoc, onSnapshot, collection, query, limit, orderBy, 
+            serverTimestamp, where, addDoc, getDoc
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global variables provided by the Canvas environment
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        let app, db, auth, userId;
+        let houseId = ''; // This will hold the user-entered 'secret' key
+
+        setLogLevel('Debug'); // Enable Firestore logging
+
+        // --- Core Firebase Initialization and Authentication ---
+
+        /**
+         * Initializes Firebase and authenticates the user.
+         */
+        async function initializeFirebase() {
+            if (Object.keys(firebaseConfig).length === 0) {
+                console.error("Firebase configuration is missing.");
+                showStatusMessage("Error: Firebase configuration is missing. Cannot save data.", 'bg-red-100 text-red-700');
+                return;
+            }
+
+            try {
+                app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                
+                // Use custom token if available, otherwise sign in anonymously
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                } else {
+                    await signInAnonymously(auth);
+                }
+
+                // Set up auth state change listener (to capture user ID after sign-in)
+                onAuthStateChanged(auth, (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        console.log("Authenticated with user ID:", userId);
+                        // Once authenticated, render the login/house setup screen
+                        renderLoginScreen();
+                    } else {
+                        console.log("Not authenticated, waiting for sign-in.");
+                    }
+                });
+
+            } catch (error) {
+                console.error("Error initializing Firebase or signing in:", error);
+                showStatusMessage(`Auth Error: ${error.message}`, 'bg-red-100 text-red-700');
+            }
+        }
+        window.initializeFirebase = initializeFirebase; // Expose for window.onload
+
+        /**
+         * Sets up the shared house environment based on the House ID.
+         * @param {string} inputHouseId - The secret key entered by the user.
+         */
+        async function setupHouse(inputHouseId) {
+            if (!inputHouseId || !db || !userId) return;
+
+            houseId = inputHouseId.trim().toLowerCase();
+            localStorage.setItem('rotationTrackerHouseId', houseId);
+            
+            // Basic input validation
+            if (houseId.length < 4) {
+                 showStatusMessage("House ID must be at least 4 characters long.", 'bg-yellow-100 text-yellow-700');
+                 return;
+            }
+
+            document.getElementById('header-subtitle').textContent = `House ID: ${houseId}`;
+
+            // 1. Render the main app interface
+            renderMainApp();
+
+            // 2. Start listening for all real-time data
+            listenToHouseData();
+            
+            showStatusMessage("Successfully joined house! Loading data...", 'bg-green-100 text-green-700');
+        }
+        window.setupHouse = setupHouse;
+
+        // --- Firestore References and Paths ---
+
+        /**
+         * Gets the Firestore document reference for the shared house settings (names, bookmark ID).
+         */
+        function getHouseDocRef() {
+            // Public data structure: /artifacts/{appId}/public/data/houses/{houseId}
+            return doc(db, 'artifacts', appId, 'public', 'data', 'houses', houseId);
+        }
+
+        /**
+         * Gets the Firestore collection reference for all rotation schedules for the house.
+         */
+        function getSchedulesCollectionRef() {
+            // Public data structure: /artifacts/{appId}/public/data/houses/{houseId}/schedules
+            return collection(db, 'artifacts', appId, 'public', 'data', 'houses', houseId, 'schedules');
+        }
+
+        // --- Data Fetching and Real-Time Listeners ---
+        
+        // State variables
+        let houseNames = ["", "", "", "", "", ""];
+        let allSchedules = []; // Stores all schedules from the last 30 days
+        let bookmarkedScheduleId = null; // Stores the ID of the currently active schedule
+        let lastRunTimestamp = 0; // Stores last run time in milliseconds
+        const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
+        /**
+         * Sets up a real-time listener for all shared house data (names, timestamp, bookmark ID).
+         * This listener manages the button state and triggers schedule listeners.
+         */
+        function listenToHouseData() {
+            onSnapshot(getHouseDocRef(), (docSnapshot) => {
+                let initialFetch = lastRunTimestamp === 0;
+
+                if (docSnapshot.exists()) {
+                    const data = docSnapshot.data();
+                    
+                    // Update names
+                    if (data.names && Array.isArray(data.names)) {
+                        houseNames = data.names.map(name => name || "");
+                        updateNameInputs();
+                    }
+                    
+                    // Update last run timestamp
+                    if (data.lastRun) {
+                        lastRunTimestamp = data.lastRun.toMillis();
+                    } else {
+                        lastRunTimestamp = 0;
+                    }
+                    
+                    // Update bookmarked schedule ID
+                    bookmarkedScheduleId = data.bookmarkedScheduleId || null;
+                    
+                    if (initialFetch) {
+                        // Start schedule listener only once after house data is fetched
+                        listenToSchedules(); 
+                    }
+                } else {
+                    // Document does not exist yet, treat as initial setup
+                    lastRunTimestamp = 0;
+                    bookmarkedScheduleId = null;
+                    // Save initial empty names array (this also creates the house doc)
+                    saveHouseData({ names: houseNames }); 
+                }
+                updateRotationButtonState();
+            }, (error) => {
+                console.error("Error listening to house data:", error);
+                showStatusMessage("Error fetching house data. Check console.", 'bg-red-100 text-red-700');
+            });
+        }
+        
+        /**
+         * Sets up a real-time listener for the latest schedule and history.
+         */
+        function listenToSchedules() {
+            // Query for schedules created in the last 30 days, ordered by creation time (newest first)
+            const thirtyDaysAgo = new Date();
+            thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+            
+            // NOTE: Firestore queries cannot efficiently filter by 'createdAt' and order by 'desc'
+            // without an index. We use 'limit' and 'orderBy' and then filter/display logic handles 30 days.
+
+            const q = query(
+                getSchedulesCollectionRef(),
+                orderBy('createdAt', 'desc'),
+                limit(15) // Fetch enough recent schedules to cover history
+            );
+
+            onSnapshot(q, (snapshot) => {
+                allSchedules = [];
+                snapshot.forEach(doc => {
+                    const schedule = doc.data();
+                    const createdAt = schedule.createdAt ? new Date(schedule.createdAt.seconds * 1000) : new Date();
+                    
+                    // Filter in memory to strictly enforce 30-day history display
+                    if (createdAt.getTime() > thirtyDaysAgo.getTime()) {
+                         allSchedules.push({ ...schedule, id: doc.id });
+                    }
+                });
+
+                renderActiveSchedule();
+                renderScheduleHistory();
+            }, (error) => {
+                console.error("Error listening to schedules:", error);
+                showStatusMessage("Error fetching schedules. Check console.", 'bg-red-100 text-red-700');
+            });
+        }
+
+        // --- Data Saving Functions ---
+
+        /**
+         * Saves or updates the shared house data (names, lastRun, bookmark ID).
+         * @param {Object} data - The data object to save.
+         */
+        async function saveHouseData(data) {
+            try {
+                // Use merge to only update the fields provided
+                await setDoc(getHouseDocRef(), {
+                    ...data,
+                    updatedAt: serverTimestamp(),
+                    updatedBy: userId,
+                }, { merge: true });
+                
+                // If lastRun was updated, update local state
+                if (data.lastRun) {
+                    lastRunTimestamp = Date.now(); 
+                }
+                console.log("House data saved successfully:", data);
+            } catch (error) {
+                console.error("Error saving house data:", error);
+                showStatusMessage(`Error saving house data: ${error.message}`, 'bg-red-100 text-red-700');
+            }
+        }
+        
+        /**
+         * Saves the newly created schedule assignments and bookmarks it.
+         * @param {Object[]} assignments - The array of date/name pairs.
+         */
+        async function saveScheduleAndBookmark(assignments) {
+            try {
+                // 1. Save the new schedule and get its ID
+                const docRef = await addDoc(getSchedulesCollectionRef(), {
+                    assignments: assignments,
+                    createdAt: serverTimestamp(),
+                    createdBy: userId,
+                });
+
+                const newScheduleId = docRef.id;
+
+                // 2. Update the main house document with the new bookmark ID
+                await saveHouseData({ 
+                    bookmarkedScheduleId: newScheduleId,
+                    lastRun: serverTimestamp() // Update the timestamp only on successful run
+                });
+
+                showStatusMessage("New rotation schedule created and set as ACTIVE!", 'bg-green-100 text-green-700');
+
+            } catch (error) {
+                console.error("Error saving schedule:", error);
+                showStatusMessage(`Error saving schedule: ${error.message}`, 'bg-red-100 text-red-700');
+            }
+        }
+
+        /**
+         * Sets a specific schedule as the active/bookmarked one.
+         * @param {string} scheduleId - The ID of the schedule to bookmark.
+         */
+        async function bookmarkSchedule(scheduleId) {
+            if (bookmarkedScheduleId === scheduleId) {
+                showStatusMessage("That schedule is already active!", 'bg-yellow-100 text-yellow-700');
+                return;
+            }
+            
+            showStatusMessage("Setting schedule as ACTIVE...", 'bg-blue-100 text-blue-700');
+            try {
+                await saveHouseData({ bookmarkedScheduleId: scheduleId });
+            } catch (error) {
+                showStatusMessage(`Failed to bookmark: ${error.message}`, 'bg-red-100 text-red-700');
+            }
+        }
+        window.bookmarkSchedule = bookmarkSchedule;
+
+        // --- UI Rendering Functions ---
+
+        /**
+         * Renders the login screen to input the House ID.
+         */
+        function renderLoginScreen() {
+            const contentArea = document.getElementById('content-area');
+            const storedHouseId = localStorage.getItem('rotationTrackerHouseId') || '';
+
+            contentArea.innerHTML = `
+                <div class="max-w-md mx-auto p-6 bg-indigo-50 rounded-xl shadow-lg">
+                    <h2 class="text-xl font-semibold text-indigo-700 mb-4">Enter Shared House ID</h2>
+                    <p class="text-gray-600 mb-4">This acts as your shared house password. All 6 roommates use the same key.</p>
+                    <input type="text" id="house-id-input" placeholder="e.g., bachelors-pad-2024"
+                        class="w-full p-3 border-2 border-indigo-300 rounded-lg focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition duration-150"
+                        value="${storedHouseId}">
+                    
+                    <button onclick="setupHouse(document.getElementById('house-id-input').value)"
+                        class="w-full mt-5 px-4 py-3 bg-green-600 text-white font-bold rounded-lg shadow-md hover:bg-green-700 transition duration-150 ease-in-out">
+                        Access House
+                    </button>
+                    <div class="text-xs text-gray-500 mt-3 text-center">
+                        Your user ID (for troubleshooting): ${userId || '...'}
+                    </div>
+                </div>
+            `;
+        }
+
+        /**
+         * Renders the main app interface (Name Inputs, Button, Results).
+         */
+        function renderMainApp() {
+            const contentArea = document.getElementById('content-area');
+            contentArea.innerHTML = `
+                <div class="mb-8 p-5 bg-indigo-50 rounded-xl shadow-inner">
+                    <h2 class="text-xl font-semibold text-indigo-700 mb-4 flex items-center">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 mr-2">
+                          <path stroke-linecap="round" stroke-linejoin="round" d="M18 18.72a4.5 4.5 0 0 0-.977-2.09L15 13.75l-4.72 2.09A4.5 4.5 0 0 0 9.977 18.72M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0ZM10.5 8.25a1.5 1.5 0 1 0-3 0 1.5 1.5 0 0 0 3 0Zm-1.5 4.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z" />
+                        </svg>
+                        The 6 Roommates (Saved)
+                    </h2>
+                    <div id="names-grid" class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <!-- Name inputs go here -->
+                    </div>
+                    <div id="name-error-message" class="mt-4 text-sm text-red-600 font-medium hidden">
+                        Please enter a unique name for all 6 spots before running the rotation.
+                    </div>
+                    <button onclick="saveCurrentNames()"
+                        class="w-full mt-4 px-4 py-2 bg-gray-200 text-gray-700 font-medium rounded-lg hover:bg-gray-300 transition duration-150">
+                        Update Roommate Names
+                    </button>
+                </div>
+
+                <!-- Action Button -->
+                <div class="flex justify-center mb-8">
+                    <button id="assign-button" onclick="initiateRotation()"
+                        class="w-full sm:w-auto px-8 py-3 bg-indigo-600 text-white font-bold text-lg rounded-full shadow-lg hover:bg-indigo-700 active:bg-indigo-800 transition duration-150 ease-in-out focus:outline-none focus:ring-4 focus:ring-indigo-300 disabled:bg-indigo-400 disabled:shadow-none"
+                        disabled>
+                        <span id="button-text">RUN NEW ROTATION!</span>
+                        <span id="loading-spinner" class="spinner hidden"></span>
+                    </button>
+                </div>
+
+                <!-- Active Schedule Section -->
+                <div id="results-container" class="mt-6">
+                    <h2 class="text-2xl font-bold text-gray-800 mb-4 text-center">ACTIVE Rotation Schedule</h2>
+                    <div id="assignment-list" class="space-y-3 p-4 border rounded-xl bg-yellow-50 border-yellow-200 min-h-[100px] flex items-center justify-center text-gray-500">
+                        No schedule has been set as active yet.
+                    </div>
+                    
+                    <h3 class="text-xl font-bold text-gray-800 mt-8 mb-4 text-center">Rotation History (Last 30 Days)</h3>
+                    <div id="history-list" class="space-y-2 p-4 border rounded-xl bg-gray-50 border-gray-200 min-h-[50px]">
+                        Loading history...
+                    </div>
+                </div>
+            `;
+            // Populate inputs after the main app structure is rendered
+            updateNameInputs();
+        }
+
+        /**
+         * Populates name inputs with saved data or updates local state from inputs.
+         */
+        function updateNameInputs() {
+            const namesGrid = document.getElementById('names-grid');
+            if (!namesGrid) return;
+            
+            namesGrid.innerHTML = ''; // Clear existing inputs
+            for (let i = 0; i < NUM_PEOPLE; i++) {
+                const nameValue = houseNames[i] || "";
+                namesGrid.innerHTML += `
+                    <div class="relative">
+                        <input type="text" id="name${i}" placeholder="Roommate ${i + 1}"
+                            class="name-input w-full p-3 border-2 border-indigo-300 rounded-lg focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition duration-150"
+                            value="${nameValue}">
+                    </div>
+                `;
+            }
+
+            // Attach event listeners to update local state on change (optional, since we use saveCurrentNames button)
+            document.querySelectorAll('.name-input').forEach((input, index) => {
+                input.addEventListener('input', (e) => {
+                    // This updates local state but requires 'Update Roommate Names' button to save to DB
+                    houseNames[index] = e.target.value.trim();
+                });
+            });
+        }
+        
+        /**
+         * Renders the currently active (bookmarked) schedule.
+         */
+        function renderActiveSchedule() {
+            const assignmentList = document.getElementById('assignment-list');
+            if (!assignmentList) return;
+
+            const activeSchedule = allSchedules.find(s => s.id === bookmarkedScheduleId);
+
+            if (!activeSchedule) {
+                assignmentList.innerHTML = '<div class="text-center p-4">No schedule has been set as active yet. Select one from the history below or run a new rotation!</div>';
+                assignmentList.classList.remove('bg-green-50', 'border-green-200');
+                assignmentList.classList.add('bg-yellow-50', 'border-yellow-200');
+                return;
+            }
+
+            assignmentList.classList.add('bg-green-50', 'border-green-200');
+            assignmentList.classList.remove('bg-yellow-50', 'border-yellow-200');
+            
+            let assignmentsHTML = '';
+            activeSchedule.assignments.forEach(item => {
+                const period = dateRanges.find(r => r.range === item.range) || { color: "bg-gray-100", border: "border-gray-400" };
+                
+                assignmentsHTML += `
+                    <div class="p-4 flex flex-col md:flex-row justify-between items-start md:items-center 
+                                rounded-xl border-l-4 ${period.border} ${period.color} shadow-md">
+                        <div class="mb-2 md:mb-0">
+                            <p class="text-sm font-medium text-gray-500">Dates</p>
+                            <span class="text-xl font-bold text-gray-800">${item.range}</span>
+                        </div>
+                        <div class="text-right">
+                            <p class="text-sm font-medium text-gray-500">Assigned To</p>
+                            <span class="text-xl font-extrabold text-indigo-700">${item.name}</span>
+                        </div>
+                    </div>
+                `;
+            });
+            assignmentList.innerHTML = assignmentsHTML;
+        }
+
+        /**
+         * Renders the schedule history list, including bookmarking options.
+         */
+        function renderScheduleHistory() {
+            const historyList = document.getElementById('history-list');
+            if (!historyList) return;
+
+            if (allSchedules.length === 0) {
+                historyList.innerHTML = '<div class="text-center text-gray-500 p-2">No rotation history available in the last 30 days.</div>';
+                return;
+            }
+
+            let historyHTML = '';
+            allSchedules.forEach(schedule => {
+                const date = schedule.createdAt ? new Date(schedule.createdAt.seconds * 1000) : new Date();
+                const formattedDate = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+                const creator = schedule.createdBy === userId ? 'You' : 'Another Roommate';
+                const isActive = schedule.id === bookmarkedScheduleId;
+
+                // Get the name assigned to the 1st-5th range for a simple summary
+                const firstAssignment = schedule.assignments.find(a => a.range === '1st - 5th')?.name || 'N/A';
+                
+                historyHTML += `
+                    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center p-3 bg-white border border-gray-300 rounded-lg shadow-sm">
+                        <div class="flex-1 mb-2 sm:mb-0">
+                            <span class="font-semibold text-gray-700">Run on ${formattedDate}</span>
+                            <span class="text-sm text-gray-500 block">by ${creator}</span>
+                            <span class="text-sm text-gray-600 block mt-1">Starts with: ${firstAssignment}</span>
+                        </div>
+                        <div class="flex items-center space-x-2">
+                            ${isActive ? 
+                                `<span class="px-3 py-1 text-xs font-bold bg-green-200 text-green-800 rounded-full">ACTIVE</span>` :
+                                `<button onclick="bookmarkSchedule('${schedule.id}')"
+                                    class="px-3 py-1 text-xs font-medium bg-indigo-500 text-white rounded-full hover:bg-indigo-600 transition">
+                                    Bookmark & Set Active
+                                </button>`
+                            }
+                        </div>
+                    </div>
+                `;
+            });
+            historyList.innerHTML = historyHTML;
+        }
+
+        /**
+         * Updates the rotation button's text and disabled state based on the 24-hour limit.
+         */
+        function updateRotationButtonState() {
+            const button = document.getElementById('assign-button');
+            const buttonText = document.getElementById('button-text');
+            if (!button || !buttonText) return;
+            
+            const timeSinceLastRun = Date.now() - lastRunTimestamp;
+            const timeLeft = ONE_DAY_MS - timeSinceLastRun;
+            
+            // Check if the names array is valid (6 unique non-empty names)
+            const enteredNames = houseNames.filter(name => name.length > 0);
+            const validNames = enteredNames.length === NUM_PEOPLE && new Set(enteredNames).size === NUM_PEOPLE;
+            
+            if (!validNames) {
+                button.disabled = true;
+                buttonText.textContent = 'Enter All 6 Names Above!';
+                document.getElementById('name-error-message')?.classList.remove('hidden');
+                return;
+            } else {
+                document.getElementById('name-error-message')?.classList.add('hidden');
+            }
+
+            if (timeLeft > 0 && lastRunTimestamp !== 0) {
+                button.disabled = true;
+                button.classList.add('disabled:bg-red-500');
+                const hours = Math.floor(timeLeft / (1000 * 60 * 60));
+                const minutes = Math.floor((timeLeft % (1000 * 60 * 60)) / (1000 * 60));
+                const seconds = Math.floor((timeLeft % (1000 * 60)) / 1000);
+                buttonText.textContent = `Wait: ${hours}h ${minutes}m ${seconds}s`;
+                
+                // Set a timeout to update the countdown
+                setTimeout(updateRotationButtonState, 1000);
+
+            } else {
+                button.disabled = false;
+                button.classList.remove('disabled:bg-red-500');
+                buttonText.textContent = 'RUN NEW ROTATION!';
+            }
+        }
+        
+        /**
+         * Utility to display temporary status messages.
+         */
+        function showStatusMessage(message, classes) {
+            const statusDiv = document.getElementById('status-message');
+            if (statusDiv) {
+                statusDiv.textContent = message;
+                statusDiv.className = `mt-6 p-3 text-sm rounded-lg text-center ${classes}`;
+                statusDiv.classList.remove('hidden');
+                setTimeout(() => statusDiv.classList.add('hidden'), 5000);
+            }
+        }
+
+        // --- Core Application Logic ---
+
+        const NUM_PEOPLE = 6;
         const dateRanges = [
             { range: "1st - 5th", color: "bg-green-100", border: "border-green-400" },
             { range: "6th - 10th", color: "bg-yellow-100", border: "border-yellow-400" },
@@ -67,114 +580,94 @@
             { range: "26th - 30th", color: "bg-indigo-100", border: "border-indigo-400" }
         ];
 
-        const numPeople = 6;
-        const namesGrid = document.getElementById('names-grid');
-
         /**
-         * Initializes the 6 name input fields on the page.
+         * Saves names from input fields to the database.
          */
-        function initializeInputs() {
-            for (let i = 1; i <= numPeople; i++) {
-                namesGrid.innerHTML += `
-                    <div class="relative">
-                        <input type="text" id="name${i}" placeholder="Roommate ${i}"
-                            class="w-full p-3 border-2 border-indigo-300 rounded-lg focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition duration-150"
-                            value="">
-                    </div>
-                `;
-            }
-        }
+        function saveCurrentNames() {
+            let namesFromInput = [];
+            const inputElements = document.querySelectorAll('.name-input');
+            inputElements.forEach(input => {
+                namesFromInput.push(input.value.trim());
+            });
+            
+            const uniqueNames = new Set(namesFromInput.filter(name => name.length > 0));
 
-        /**
-         * Fisher-Yates (Knuth) Shuffle Algorithm
-         * @param {Array} array - The array to shuffle
-         * @returns {Array} - The shuffled array
-         */
-        function shuffle(array) {
-            let currentIndex = array.length, randomIndex;
-            let arrCopy = [...array]; // Create a copy to avoid modifying original array
-
-            // While there remain elements to shuffle.
-            while (currentIndex !== 0) {
-                // Pick a remaining element.
-                randomIndex = Math.floor(Math.random() * currentIndex);
-                currentIndex--;
-
-                // And swap it with the current element.
-                [arrCopy[currentIndex], arrCopy[randomIndex]] = [
-                    arrCopy[randomIndex], arrCopy[currentIndex]
-                ];
-            }
-
-            return arrCopy;
-        }
-
-        /**
-         * The main function to collect names, randomize, and display the assignments.
-         */
-        function assignTasks() {
-            const assignmentList = document.getElementById('assignment-list');
-            const errorMessage = document.getElementById('error-message');
-            const resultsTitle = document.getElementById('results-title');
-
-            // 1. Collect and validate names
-            let names = [];
-            for (let i = 1; i <= numPeople; i++) {
-                const name = document.getElementById(`name${i}`).value.trim();
-                if (name) {
-                    names.push(name);
-                }
-            }
-
-            // Check for exactly 6 names and no duplicates
-            const uniqueNames = new Set(names);
-            if (names.length !== numPeople || uniqueNames.size !== numPeople) {
-                assignmentList.innerHTML = '';
-                resultsTitle.classList.add('hidden');
-                errorMessage.classList.remove('hidden');
+            if (namesFromInput.length !== NUM_PEOPLE || uniqueNames.size !== NUM_PEOPLE) {
+                showStatusMessage("Error: Must enter 6 unique names to save.", 'bg-red-100 text-red-700');
                 return;
             }
 
-            errorMessage.classList.add('hidden');
-            resultsTitle.classList.remove('hidden');
+            // Update local state and save to firestore
+            houseNames = namesFromInput; 
+            saveHouseData({ names: houseNames });
+            showStatusMessage("Names updated and saved for the whole house!", 'bg-green-100 text-green-700');
+        }
+        window.saveCurrentNames = saveCurrentNames;
 
-            // 2. Randomize the names
-            const shuffledNames = shuffle(names);
 
-            // 3. Create the assignments
-            let assignmentsHTML = '';
-            shuffledNames.forEach((name, index) => {
-                const period = dateRanges[index];
+        /**
+         * Initiates the randomization process and saves the result.
+         */
+        async function initiateRotation() {
+            const button = document.getElementById('assign-button');
+            
+            // Check validation again
+            const enteredNames = houseNames.filter(name => name.length > 0);
+            const uniqueNames = new Set(enteredNames);
+            
+            if (enteredNames.length !== NUM_PEOPLE || uniqueNames.size !== NUM_PEOPLE) {
+                showStatusMessage("Error: 6 unique names are required to run the rotation.", 'bg-red-100 text-red-700');
+                return;
+            }
+
+            const buttonText = document.getElementById('button-text');
+            const loadingSpinner = document.getElementById('loading-spinner');
+            
+            // Prevent double-click and show loading
+            button.disabled = true;
+            buttonText.textContent = 'Running...';
+            loadingSpinner.classList.remove('hidden');
+
+            try {
+                // 1. Shuffle the names
+                const shuffledNames = shuffle([...houseNames]);
+
+                // 2. Create the assignments list
+                const assignments = shuffledNames.map((name, index) => ({
+                    range: dateRanges[index].range,
+                    name: name
+                }));
+
+                // 3. Save the new schedule and automatically bookmark it, and update the timestamp
+                await saveScheduleAndBookmark(assignments);
                 
-                // Card for each assignment
-                assignmentsHTML += `
-                    <div class="p-4 flex flex-col md:flex-row justify-between items-start md:items-center 
-                                rounded-xl border-l-4 ${period.border} ${period.color} shadow-md transition duration-300 hover:shadow-lg">
-                        
-                        <!-- Date Range (The Chore/Period) -->
-                        <div class="mb-2 md:mb-0">
-                            <p class="text-sm font-medium text-gray-500">Dates</p>
-                            <span class="text-xl font-bold text-gray-800">${period.range}</span>
-                        </div>
-
-                        <!-- Assigned Person -->
-                        <div class="text-right">
-                            <p class="text-sm font-medium text-gray-500">Assigned To</p>
-                            <span class="text-xl font-extrabold text-indigo-700">${name}</span>
-                        </div>
-                    </div>
-                `;
-            });
-
-            // 4. Display results
-            assignmentList.innerHTML = assignmentsHTML;
-
-            // Optional: Scroll to results
-            document.getElementById('results-container').scrollIntoView({ behavior: 'smooth' });
+            } catch (error) {
+                console.error("Rotation initiation failed:", error);
+                showStatusMessage(`Rotation failed: ${error.message}`, 'bg-red-100 text-red-700');
+            } finally {
+                // Restore button state
+                loadingSpinner.classList.add('hidden');
+                updateRotationButtonState(); // Re-check cooldown
+            }
+        }
+        window.initiateRotation = initiateRotation;
+        
+        /**
+         * Fisher-Yates (Knuth) Shuffle Algorithm
+         */
+        function shuffle(array) {
+            let currentIndex = array.length, randomIndex;
+            while (currentIndex !== 0) {
+                randomIndex = Math.floor(Math.random() * currentIndex);
+                currentIndex--;
+                [array[currentIndex], array[randomIndex]] = [array[randomIndex], array[currentIndex]];
+            }
+            return array;
         }
 
-        // Initialize inputs when the window loads
-        window.onload = initializeInputs;
+        // --- Bootstrap ---
+        window.onload = initializeFirebase;
+
     </script>
 </body>
 </html>
