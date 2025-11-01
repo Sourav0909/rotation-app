@@ -87,7 +87,6 @@
 
     <script type="module">
         // --- IMPORTS ---
-        // These imports load the Firebase functions
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { 
             getAuth, 
@@ -107,7 +106,6 @@
         import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // --- GLOBAL APP VARIABLES ---
-        // const firebaseConfig is now defined in the <head>
         let app, db, auth, userId;
         let houseUsername = '';
         let houseMembersList = [];
@@ -120,8 +118,6 @@
          * Initializes Firebase and sets up auth state listener.
          */
         async function initializeFirebase() {
-            // *** MODIFIED ***
-            // Check for the config object on the 'window'
             if (typeof window.firebaseConfig === 'undefined' || Object.keys(window.firebaseConfig).length === 0) {
                 console.error("Firebase configuration is missing.");
                 showStatusMessage("Error: Firebase configuration is missing. Cannot save data.", 'bg-red-100 text-red-700');
@@ -129,14 +125,13 @@
             }
 
             try {
-                // *** MODIFIED ***
-                // Initialize the app using the global config
                 app = initializeApp(window.firebaseConfig);
                 db = getFirestore(app);
                 auth = getAuth(app);
                 
                 onAuthStateChanged(auth, async (user) => {
                     if (user) {
+                        // ** User is LOGGED IN **
                         userId = user.uid;
                         console.log("Authenticated with user ID:", userId);
                         document.getElementById('sign-out-button').classList.remove('hidden');
@@ -144,6 +139,7 @@
                         const userDocRef = getUserDocRef();
                         const userDoc = await getDoc(userDocRef);
 
+                        // Ensure user doc exists
                         if (!userDoc.exists()) {
                             await setDoc(userDocRef, {
                                 nickname: user.displayName || user.email.split('@')[0], 
@@ -154,18 +150,26 @@
                         
                         // Re-fetch doc after potential creation
                         const updatedUserDoc = await getDoc(userDocRef);
+                        
+                        // ** NEW FLOW LOGIC (LOGGED IN) **
                         if (updatedUserDoc.exists() && updatedUserDoc.data().houseUsername) {
+                            // 1. User is in a house -> Go to app
                             const userHouse = updatedUserDoc.data().houseUsername;
                             await setupHouse(userHouse);
                         } else {
+                            // 2. User is NOT in a house -> Show Create/Join choice
                             renderInitialChoiceScreen(true);
                         }
                     } else {
+                        // ** User is LOGGED OUT **
                         userId = null;
                         houseUsername = '';
                         console.log("Not authenticated.");
                         document.getElementById('sign-out-button').classList.add('hidden');
-                        renderInitialChoiceScreen(false);
+                        
+                        // ** NEW FLOW LOGIC (LOGGED OUT) **
+                        // 3. Show the login screen by default
+                        renderAuthScreen('login');
                     }
                 });
 
@@ -177,7 +181,7 @@
         window.initializeFirebase = initializeFirebase;
         
         /**
-         * Handles user sign-out.
+         * Handles user sign-out. (Unchanged)
          */
         async function handleSignOut() {
             try {
@@ -191,7 +195,7 @@
         window.handleSignOut = handleSignOut;
         
         /**
-         * Handles user leaving a house.
+         * Handles user leaving a house. (Unchanged)
          */
         async function handleLeaveHouse() {
             const confirmLeave = confirm("Are you sure you want to leave this house? You will lose access to its rotation schedules.");
@@ -217,7 +221,7 @@
                 houseMembersList = [];
                 closeMembersModal();
                 showStatusMessage("You have successfully left the house.", 'bg-green-100 text-green-700');
-                renderInitialChoiceScreen(true);
+                renderInitialChoiceScreen(true); // Show choice screen after leaving
 
             } catch (error) {
                 console.error("Error leaving house:", error);
@@ -228,7 +232,7 @@
 
 
         /**
-         * Sets up the shared house environment based on the House Username.
+         * Sets up the shared house environment. (Unchanged)
          */
         async function setupHouse(inputHouseUsername) {
             if (!inputHouseUsername || !db || !userId) return;
@@ -242,7 +246,7 @@
             showStatusMessage("Successfully joined house! Loading data...", 'bg-green-100 text-green-700');
         }
 
-        // --- Firestore References and Paths ---
+        // --- Firestore References and Paths (Unchanged) ---
 
         function getUserDocRef() {
             if (!userId) return null;
@@ -259,7 +263,7 @@
             return collection(db, 'houses', houseUsername, 'schedules');
         }
 
-        // --- Data Fetching and Real-Time Listeners ---
+        // --- Data Fetching and Real-Time Listeners (Unchanged) ---
         
         let houseNames = [];
         let allSchedules = [];
@@ -402,11 +406,18 @@
 
         // --- UI Rendering and Auth Functions ---
 
-        function renderInitialChoiceScreen(isAuthenticated = false) {
+        /**
+         * Renders the Create/Join choice screen.
+         * This is now only shown to authenticated users who are not in a house.
+         */
+        function renderInitialChoiceScreen(isAuthenticated = true) {
             const contentArea = document.getElementById('content-area');
-            const subtext = isAuthenticated 
+            
+            // *** MODIFIED ***
+            // Simplified subtext since user is always authenticated here
+            const subtext = (auth.currentUser)
                 ? `You're signed in as ${auth.currentUser.displayName || auth.currentUser.email}.<br>Now, create or join a house.`
-                : "You'll need an individual account to join or create a house.";
+                : "Welcome! Please create or join a house.";
             
             document.getElementById('header-subtitle').innerHTML = "Welcome! Create or join a house.";
 
@@ -414,11 +425,11 @@
                 <div class="max-w-md mx-auto p-6 bg-indigo-50 rounded-xl shadow-lg">
                     <p class="text-gray-600 mb-6 text-center">${subtext}</p>
                     <div class="flex flex-col sm:flex-row gap-4">
-                        <button onclick="handleAuthChoice('create', ${isAuthenticated})"
+                        <button onclick="handleAuthChoice('create', true)"
                             class="flex-1 px-4 py-3 bg-indigo-600 text-white font-bold rounded-lg shadow-md hover:bg-indigo-700 transition">
                             Create a House
                         </button>
-                        <button onclick="handleAuthChoice('join', ${isAuthenticated})"
+                        <button onclick="handleAuthChoice('join', true)"
                             class="flex-1 px-4 py-3 bg-green-600 text-white font-bold rounded-lg shadow-md hover:bg-green-700 transition">
                             Join a House
                         </button>
@@ -426,6 +437,8 @@
                 </div>
             `;
         }
+        
+        // This function's logic is still correct.
         window.handleAuthChoice = (intent, isAuthenticated) => {
             if (isAuthenticated) {
                 if (intent === 'create') {
@@ -434,11 +447,17 @@
                     renderJoinHouseScreen();
                 }
             } else {
-                renderAuthScreen(intent, 'login');
+                // This 'else' block is no longer reachable with the new flow,
+                // but it doesn't hurt to leave it.
+                renderAuthScreen('login');
             }
         };
 
-        function renderAuthScreen(intent, mode = 'login') {
+        /**
+         * Renders the Login/Signup form.
+         * 'intent' parameter is removed as it's no longer needed here.
+         */
+        function renderAuthScreen(mode = 'login') {
             const contentArea = document.getElementById('content-area');
             const isLogin = mode === 'login';
             
@@ -450,7 +469,7 @@
                 <div class="max-w-md mx-auto p-6 bg-gray-50 rounded-xl shadow-lg">
                     <h2 class="text-xl font-semibold text-indigo-700 mb-4">${isLogin ? 'Sign In' : 'Sign Up'}</h2>
                     
-                    <button onclick="handleGoogleLogin('${intent}')"
+                    <button onclick="handleGoogleLogin()"
                         class="w-full mb-4 flex items-center justify-center space-x-3 px-4 py-3 bg-white border border-gray-300 text-gray-700 font-medium rounded-lg shadow-md hover:bg-gray-100 transition">
                         <svg class="w-5 h-5" viewBox="0 0 48 48">
                             <path fill="#FFC107" d="M43.61,20.08v-3.7H24v7.71h10.98c-0.67,3.15-2.78,6.88-8.23,6.88c-4.99,0-9.04-4.04-9.04-9.03 c0-4.99,4.05-9.03,9.04-9.03c2.81,0,4.64,1.15,6.01,2.54l2.94-2.88c-1.89-1.82-4.32-3.11-7.05-3.11c-7.83,0-14.16,6.34-14.16,14.16 c0,7.82,6.33,14.16,14.16,14.16c7.09,0,11.83-4.96,11.83-11.58C39.81,24.08,43.61,20.08,43.61,20.08z"/>
@@ -486,13 +505,13 @@
                         </div>
                     </div>
                     
-                    <button onclick="${isLogin ? `handleLogin('${intent}')` : `handleSignup('${intent}')`}"
+                    <button onclick="${isLogin ? `handleLogin()` : `handleSignup()`}"
                         class="w-full mt-6 px-4 py-3 bg-indigo-600 text-white font-bold rounded-lg shadow-md hover:bg-indigo-700 transition">
                         ${isLogin ? 'Login' : 'Create Account'}
                     </button>
                     
                     <div class="text-center mt-4">
-                        <button onclick="renderAuthScreen('${intent}', '${isLogin ? 'signup' : 'login'}')"
+                        <button onclick="renderAuthScreen('${isLogin ? 'signup' : 'login'}')"
                             class="text-sm text-indigo-600 hover:underline">
                             ${isLogin ? 'Need an account? Sign Up' : 'Already have an account? Login'}
                         </button>
@@ -502,7 +521,12 @@
         }
         window.renderAuthScreen = renderAuthScreen;
 
-        async function handleGoogleLogin(intent) {
+        /**
+         * Handles Google Login.
+         * 'intent' parameter removed.
+         * Now directs to choice screen if user has no house.
+         */
+        async function handleGoogleLogin() {
             const provider = new GoogleAuthProvider();
             showStatusMessage("Signing in with Google...", 'bg-blue-100 text-blue-700');
 
@@ -524,12 +548,14 @@
                 showStatusMessage(`Welcome, ${user.displayName || user.email}!`, 'bg-green-100 text-green-700');
                 
                 const updatedUserDoc = await getDoc(userDocRef); // Re-check doc
+                
+                // *** MODIFIED ***
+                // Simplified logic: If user has a house, setupHouse.
+                // If not, show the Create/Join choice screen.
                 if (updatedUserDoc.exists() && updatedUserDoc.data().houseUsername) {
                    await setupHouse(updatedUserDoc.data().houseUsername);
-                } else if (intent === 'create') {
-                    renderCreateHouseScreen();
                 } else {
-                    renderJoinHouseScreen();
+                    renderInitialChoiceScreen(true);
                 }
 
             } catch (error) {
@@ -543,7 +569,12 @@
         }
         window.handleGoogleLogin = handleGoogleLogin;
 
-        async function handleLogin(intent) {
+        /**
+         * Handles Email/Password Login.
+         * 'intent' parameter removed.
+         * Now directs to choice screen if user has no house.
+         */
+        async function handleLogin() {
             const email = document.getElementById('email-input').value;
             const password = document.getElementById('password-input').value;
             if (!email || !password) {
@@ -558,12 +589,14 @@
 
                 const userDocRef = doc(db, 'users', user.uid);
                 const userDoc = await getDoc(userDocRef);
+                
+                // *** MODIFIED ***
+                // Simplified logic: If user has a house, setupHouse.
+                // If not, show the Create/Join choice screen.
                 if (userDoc.exists() && userDoc.data().houseUsername) {
                    await setupHouse(userDoc.data().houseUsername);
-                } else if (intent === 'create') {
-                    renderCreateHouseScreen();
                 } else {
-                    renderJoinHouseScreen();
+                    renderInitialChoiceScreen(true);
                 }
             } catch (error) {
                 console.error("Login error:", error);
@@ -572,7 +605,12 @@
         }
         window.handleLogin = handleLogin;
         
-        async function handleSignup(intent) {
+        /**
+         * Handles Email/Password Signup.
+         * 'intent' parameter removed.
+         * Now directs to choice screen after successful signup.
+         */
+        async function handleSignup() {
             const email = document.getElementById('email-input').value;
             const password = document.getElementById('password-input').value;
             const nickname = document.getElementById('nickname-input').value.trim();
@@ -600,11 +638,11 @@
                 });
 
                 showStatusMessage(`Welcome, ${nickname}!`, 'bg-green-100 text-green-700');
-                if (intent === 'create') {
-                    renderCreateHouseScreen();
-                } else {
-                    renderJoinHouseScreen();
-                }
+                
+                // *** MODIFIED ***
+                // After signup, user is authenticated but has no house.
+                // Show them the Create/Join choice screen.
+                renderInitialChoiceScreen(true);
                 
             } catch (error) {
                 console.error("Signup error:", error);
@@ -613,6 +651,9 @@
         }
         window.handleSignup = handleSignup;
         
+        /**
+         * Renders Create House Screen (Unchanged)
+         */
         function renderCreateHouseScreen() {
             document.getElementById('header-subtitle').textContent = "Set up your new house";
             const contentArea = document.getElementById('content-area');
@@ -640,6 +681,9 @@
             `;
         }
         
+        /**
+         * Renders Join House Screen (Unchanged)
+         */
         function renderJoinHouseScreen() {
             document.getElementById('header-subtitle').textContent = "Find your house";
             const contentArea = document.getElementById('content-area');
@@ -661,6 +705,9 @@
             `;
         }
         
+        /**
+         * Handles Create House Logic (Unchanged)
+         */
         async function handleCreateHouse() {
             const houseName = document.getElementById('house-name-input').value.trim();
             const inputUsername = document.getElementById('house-username-input').value.trim().toLowerCase();
@@ -708,6 +755,9 @@
         }
         window.handleCreateHouse = handleCreateHouse;
         
+        /**
+         * Handles Join House Logic (Unchanged)
+         */
         async function handleJoinHouse() {
             const inputUsername = document.getElementById('house-username-input').value.trim().toLowerCase();
             if (!inputUsername) {
@@ -745,6 +795,9 @@
         }
         window.handleJoinHouse = handleJoinHouse;
 
+        /**
+         * Renders the Main Application UI (Unchanged from your file)
+         */
         function renderMainApp() {
             const contentArea = document.getElementById('content-area');
             contentArea.innerHTML = `
@@ -789,7 +842,7 @@
 
                 <div id="results-container" class="mt-6">
                     <h2 class="text-2xl font-bold text-gray-800 mb-4 text-center">ACTIVE Rotation Schedule</h2>
-                    <div id="assignment-list" class="space-y-3 p-4 border rounded-xl bg-yellow-50 border-yellow-200 min-h-[100px] flex items-center justify-center text-gray-500">
+                    <div id="assignment-list" class="p-4 border rounded-xl bg-yellow-50 border-yellow-200 min-h-[100px] flex items-center justify-center text-gray-500">
                         No schedule has been set as active yet.
                     </div>
                     
@@ -802,6 +855,9 @@
             updateNameInputs();
         }
         
+        /**
+         * Modal Functions (Unchanged)
+         */
         function openMembersModal() {
             const modal = document.getElementById('members-modal');
             const listContainer = document.getElementById('members-list-container');
@@ -825,6 +881,9 @@
         }
         window.closeMembersModal = closeMembersModal;
 
+        /**
+         * Name Input Functions (Unchanged)
+         */
         function updateNameInputs() {
             const namesGrid = document.getElementById('names-grid');
             if (!namesGrid) return;
@@ -877,6 +936,9 @@
         }
         window.removeRotationSlot = removeRotationSlot;
         
+        /**
+         * Renders Active Schedule (Unchanged from your file)
+         */
         function renderActiveSchedule() {
             const assignmentList = document.getElementById('assignment-list');
             if (!assignmentList) return;
@@ -887,11 +949,20 @@
                 assignmentList.innerHTML = '<div class="text-center p-4">No schedule has been set as active yet.</div>';
                 assignmentList.classList.remove('bg-green-50', 'border-green-200');
                 assignmentList.classList.add('bg-yellow-50', 'border-yellow-200');
+
+                // Restore flex properties for centered text
+                assignmentList.classList.add('flex', 'items-center', 'justify-center');
+                assignmentList.classList.remove('space-y-3');
+                
                 return;
             }
 
             assignmentList.classList.add('bg-green-50', 'border-green-200');
             assignmentList.classList.remove('bg-yellow-50', 'border-yellow-200');
+            
+            // Remove flex properties and add vertical stacking
+            assignmentList.classList.remove('flex', 'items-center', 'justify-center');
+            assignmentList.classList.add('space-y-3');
             
             let assignmentsHTML = '';
             activeSchedule.assignments.forEach(item => {
@@ -914,6 +985,9 @@
             assignmentList.innerHTML = assignmentsHTML;
         }
 
+        /**
+         * Renders Schedule History (Unchanged)
+         */
         function renderScheduleHistory() {
             const historyList = document.getElementById('history-list');
             if (!historyList) return;
@@ -956,6 +1030,9 @@
             historyList.innerHTML = historyHTML;
         }
 
+        /**
+         * Updates Rotation Button State (Unchanged)
+         */
         function updateRotationButtonState() {
             const button = document.getElementById('assign-button');
             const buttonText = document.getElementById('button-text');
@@ -1002,6 +1079,9 @@
             }
         }
         
+        /**
+         * Shows Status Message (Unchanged)
+         */
         function showStatusMessage(message, classes) {
             const statusDiv = document.getElementById('status-message');
             if (statusDiv) {
@@ -1012,7 +1092,7 @@
             }
         }
 
-        // --- Core Application Logic ---
+        // --- Core Application Logic (Unchanged) ---
 
         const dateRanges = [
             { range: "1st - 5th", color: "bg-green-100", border: "border-green-400" },
@@ -1098,7 +1178,7 @@
         window.initiateRotation = initiateRotation;
         
         /**
-         * Fisher-Yates (Knuth) Shuffle Algorithm
+         * Fisher-Yates (Knuth) Shuffle Algorithm (Unchanged)
          */
         function shuffle(array) {
             let currentIndex = array.length, randomIndex;
@@ -1111,8 +1191,6 @@
         }
 
         // --- Bootstrap ---
-        // This will run the initializeFirebase function after the page (and the config in the head)
-        // has finished loading.
         window.onload = initializeFirebase;
 
     </script>
