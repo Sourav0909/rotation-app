@@ -28,180 +28,285 @@
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
+        
+        /* Modal styles */
+        .modal-backdrop {
+            background-color: rgba(0, 0, 0, 0.5);
+        }
     </style>
+
+    <script>
+        const firebaseConfig = {
+          apiKey: "AIzaSyAAHhHrkiO3JkAf_kEDNZPWN_kZBtdSmN8",
+          authDomain: "bachelor-s-house.firebaseapp.com",
+          projectId: "bachelor-s-house",
+          storageBucket: "bachelor-s-house.firebasestorage.app",
+          messagingSenderId: "719230410615",
+          appId: "1:719230410615:web:06cf1b462dc46f55b44b72",
+          measurementId: "G-RX28GL4280"
+        };
+    </script>
 </head>
 <body class="p-4 md:p-8 min-h-screen flex items-start justify-center">
 
     <div id="app-container" class="w-full max-w-3xl bg-white shadow-2xl rounded-xl p-6 md:p-10 transition-all duration-300 app-card">
-        <header class="text-center mb-8">
+        <header class="text-center mb-8 relative">
             <h1 class="text-3xl font-bold text-indigo-700 mb-2">Bachelor House Rotation</h1>
-            <p class="text-gray-500" id="header-subtitle">Login to your shared House Account.</p>
+            <p class="text-gray-500" id="header-subtitle">Welcome! Create or join a house.</p>
+            
+            <button id="sign-out-button" onclick="handleSignOut()"
+                class="absolute top-0 right-0 px-3 py-1 text-sm bg-red-500 text-white rounded-lg shadow hover:bg-red-600 transition hidden">
+                Sign Out
+            </button>
         </header>
 
-        <!-- Main Content Area -->
         <div id="content-area">
-            <!-- Content will be swapped between Login and Main App -->
-        </div>
+            </div>
 
         <div id="status-message" class="mt-6 p-3 text-sm rounded-lg text-center hidden"></div>
-
     </div>
 
-    <!-- Firebase SDKs -->
+    <div id="members-modal" class="fixed inset-0 z-50 flex items-center justify-center p-4 hidden">
+        <div class="modal-backdrop fixed inset-0" onclick="closeMembersModal()"></div>
+        <div class="bg-white rounded-xl shadow-2xl z-10 w-full max-w-md p-6">
+            <h2 class="text-2xl font-bold text-gray-800 mb-4">House Members</h2>
+            <div id="members-list-container" class="space-y-3 max-h-60 overflow-y-auto">
+                <p class="text-gray-500">Loading members...</p>
+            </div>
+            <button onclick="closeMembersModal()"
+                class="w-full mt-6 px-4 py-2 bg-gray-200 text-gray-700 font-medium rounded-lg hover:bg-gray-300 transition duration-150">
+                Close
+            </button>
+            <button onclick="handleLeaveHouse()"
+                class="w-full mt-2 px-4 py-2 bg-red-100 text-red-700 font-medium rounded-lg hover:bg-red-200 transition duration-150">
+                Leave House
+            </button>
+        </div>
+    </div>
+
+
     <script type="module">
+        // --- IMPORTS ---
+        // These imports load the Firebase functions
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { 
+            getAuth, 
+            onAuthStateChanged,
+            createUserWithEmailAndPassword,
+            signInWithEmailAndPassword,
+            updateProfile,
+            signOut,
+            GoogleAuthProvider, 
+            signInWithPopup 
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { 
             getFirestore, doc, setDoc, onSnapshot, collection, query, limit, orderBy, 
-            serverTimestamp, where, addDoc, getDoc
+            serverTimestamp, where, addDoc, getDoc, runTransaction, arrayUnion,
+            arrayRemove
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // Global variables provided by the Canvas environment
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-
+        // --- GLOBAL APP VARIABLES ---
+        // const firebaseConfig is now defined in the <head>
         let app, db, auth, userId;
-        let houseId = ''; // This will hold the user-entered 'secret' key
+        let houseUsername = '';
+        let houseMembersList = [];
 
-        setLogLevel('Debug'); // Enable Firestore logging
+        setLogLevel('Error');
 
         // --- Core Firebase Initialization and Authentication ---
 
         /**
-         * Initializes Firebase and authenticates the user.
+         * Initializes Firebase and sets up auth state listener.
          */
         async function initializeFirebase() {
-            if (Object.keys(firebaseConfig).length === 0) {
+            // *** MODIFIED ***
+            // Check for the config object on the 'window'
+            if (typeof window.firebaseConfig === 'undefined' || Object.keys(window.firebaseConfig).length === 0) {
                 console.error("Firebase configuration is missing.");
                 showStatusMessage("Error: Firebase configuration is missing. Cannot save data.", 'bg-red-100 text-red-700');
                 return;
             }
 
             try {
-                app = initializeApp(firebaseConfig);
+                // *** MODIFIED ***
+                // Initialize the app using the global config
+                app = initializeApp(window.firebaseConfig);
                 db = getFirestore(app);
                 auth = getAuth(app);
                 
-                // Use custom token if available, otherwise sign in anonymously
-                if (initialAuthToken) {
-                    await signInWithCustomToken(auth, initialAuthToken);
-                } else {
-                    await signInAnonymously(auth);
-                }
-
-                // Set up auth state change listener (to capture user ID after sign-in)
-                onAuthStateChanged(auth, (user) => {
+                onAuthStateChanged(auth, async (user) => {
                     if (user) {
                         userId = user.uid;
                         console.log("Authenticated with user ID:", userId);
-                        // Once authenticated, render the login/house setup screen
-                        renderLoginScreen();
+                        document.getElementById('sign-out-button').classList.remove('hidden');
+
+                        const userDocRef = getUserDocRef();
+                        const userDoc = await getDoc(userDocRef);
+
+                        if (!userDoc.exists()) {
+                            await setDoc(userDocRef, {
+                                nickname: user.displayName || user.email.split('@')[0], 
+                                email: user.email,
+                                createdAt: serverTimestamp()
+                            });
+                        }
+                        
+                        // Re-fetch doc after potential creation
+                        const updatedUserDoc = await getDoc(userDocRef);
+                        if (updatedUserDoc.exists() && updatedUserDoc.data().houseUsername) {
+                            const userHouse = updatedUserDoc.data().houseUsername;
+                            await setupHouse(userHouse);
+                        } else {
+                            renderInitialChoiceScreen(true);
+                        }
                     } else {
-                        console.log("Not authenticated, waiting for sign-in.");
+                        userId = null;
+                        houseUsername = '';
+                        console.log("Not authenticated.");
+                        document.getElementById('sign-out-button').classList.add('hidden');
+                        renderInitialChoiceScreen(false);
                     }
                 });
 
             } catch (error) {
-                console.error("Error initializing Firebase or signing in:", error);
+                console.error("Error initializing Firebase:", error);
                 showStatusMessage(`Auth Error: ${error.message}`, 'bg-red-100 text-red-700');
             }
         }
-        window.initializeFirebase = initializeFirebase; // Expose for window.onload
-
+        window.initializeFirebase = initializeFirebase;
+        
         /**
-         * Sets up the shared house environment based on the House ID.
-         * @param {string} inputHouseId - The secret key entered by the user.
+         * Handles user sign-out.
          */
-        async function setupHouse(inputHouseId) {
-            if (!inputHouseId || !db || !userId) return;
+        async function handleSignOut() {
+            try {
+                await signOut(auth);
+                showStatusMessage("You have been signed out.", 'bg-green-100 text-green-700');
+            } catch (error) {
+                console.error("Sign out error:", error);
+                showStatusMessage(`Sign out error: ${error.message}`, 'bg-red-100 text-red-700');
+            }
+        }
+        window.handleSignOut = handleSignOut;
+        
+        /**
+         * Handles user leaving a house.
+         */
+        async function handleLeaveHouse() {
+            const confirmLeave = confirm("Are you sure you want to leave this house? You will lose access to its rotation schedules.");
+            if (!confirmLeave) return;
 
-            houseId = inputHouseId.trim().toLowerCase();
-            localStorage.setItem('rotationTrackerHouseId', houseId);
+            showStatusMessage("Leaving house...", 'bg-blue-100 text-blue-700');
             
-            // Basic input validation
-            if (houseId.length < 4) {
-                 showStatusMessage("House ID must be at least 4 characters long.", 'bg-yellow-100 text-yellow-700');
-                 return;
+            const userDocRef = getUserDocRef();
+            const houseDocRef = getHouseDocRef();
+
+            if (!userDocRef || !houseDocRef) {
+                showStatusMessage("Error: User or house not found.", 'bg-red-100 text-red-700');
+                return;
             }
 
-            document.getElementById('header-subtitle').textContent = `House ID: ${houseId}`;
+            try {
+                await runTransaction(db, async (transaction) => {
+                    transaction.update(userDocRef, { houseUsername: null });
+                    transaction.update(houseDocRef, { members: arrayRemove(userId) });
+                });
 
-            // 1. Render the main app interface
+                houseUsername = '';
+                houseMembersList = [];
+                closeMembersModal();
+                showStatusMessage("You have successfully left the house.", 'bg-green-100 text-green-700');
+                renderInitialChoiceScreen(true);
+
+            } catch (error) {
+                console.error("Error leaving house:", error);
+                showStatusMessage(`Error leaving house: ${error.message}`, 'bg-red-100 text-red-700');
+            }
+        }
+        window.handleLeaveHouse = handleLeaveHouse;
+
+
+        /**
+         * Sets up the shared house environment based on the House Username.
+         */
+        async function setupHouse(inputHouseUsername) {
+            if (!inputHouseUsername || !db || !userId) return;
+
+            houseUsername = inputHouseUsername.trim().toLowerCase();
+            document.getElementById('header-subtitle').textContent = `House ID: ${houseUsername}`;
+
             renderMainApp();
-
-            // 2. Start listening for all real-time data
             listenToHouseData();
             
             showStatusMessage("Successfully joined house! Loading data...", 'bg-green-100 text-green-700');
         }
-        window.setupHouse = setupHouse;
 
         // --- Firestore References and Paths ---
 
-        /**
-         * Gets the Firestore document reference for the shared house settings (names, bookmark ID).
-         */
-        function getHouseDocRef() {
-            // Public data structure: /artifacts/{appId}/public/data/houses/{houseId}
-            return doc(db, 'artifacts', appId, 'public', 'data', 'houses', houseId);
+        function getUserDocRef() {
+            if (!userId) return null;
+            return doc(db, 'users', userId);
         }
 
-        /**
-         * Gets the Firestore collection reference for all rotation schedules for the house.
-         */
+        function getHouseDocRef() {
+            if (!houseUsername) return null;
+            return doc(db, 'houses', houseUsername);
+        }
+
         function getSchedulesCollectionRef() {
-            // Public data structure: /artifacts/{appId}/public/data/houses/{houseId}/schedules
-            return collection(db, 'artifacts', appId, 'public', 'data', 'houses', houseId, 'schedules');
+            if (!houseUsername) return null;
+            return collection(db, 'houses', houseUsername, 'schedules');
         }
 
         // --- Data Fetching and Real-Time Listeners ---
         
-        // State variables
-        let houseNames = ["", "", "", "", "", ""];
-        let allSchedules = []; // Stores all schedules from the last 30 days
-        let bookmarkedScheduleId = null; // Stores the ID of the currently active schedule
-        let lastRunTimestamp = 0; // Stores last run time in milliseconds
+        let houseNames = [];
+        let allSchedules = [];
+        let bookmarkedScheduleId = null;
+        let lastRunTimestamp = 0;
         const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
-        /**
-         * Sets up a real-time listener for all shared house data (names, timestamp, bookmark ID).
-         * This listener manages the button state and triggers schedule listeners.
-         */
         function listenToHouseData() {
-            onSnapshot(getHouseDocRef(), (docSnapshot) => {
+            const houseDocRef = getHouseDocRef();
+            if (!houseDocRef) return;
+
+            onSnapshot(houseDocRef, async (docSnapshot) => {
                 let initialFetch = lastRunTimestamp === 0;
 
                 if (docSnapshot.exists()) {
                     const data = docSnapshot.data();
                     
-                    // Update names
                     if (data.names && Array.isArray(data.names)) {
                         houseNames = data.names.map(name => name || "");
-                        updateNameInputs();
-                    }
-                    
-                    // Update last run timestamp
-                    if (data.lastRun) {
-                        lastRunTimestamp = data.lastRun.toMillis();
                     } else {
-                        lastRunTimestamp = 0;
+                        houseNames = ["", "", ""];
                     }
+                    updateNameInputs();
                     
-                    // Update bookmarked schedule ID
+                    lastRunTimestamp = data.lastRun ? data.lastRun.toMillis() : 0;
                     bookmarkedScheduleId = data.bookmarkedScheduleId || null;
-                    
+
+                    const memberIds = data.members || [];
+                    try {
+                        const memberPromises = memberIds.map(id => getDoc(doc(db, 'users', id)));
+                        const memberDocs = await Promise.all(memberPromises);
+                        houseMembersList = memberDocs
+                            .filter(d => d.exists())
+                            .map(d => d.data().nickname || 'Unknown User');
+                    } catch (error) {
+                        console.error("Error fetching member nicknames:", error);
+                        houseMembersList = ['Error loading members.'];
+                    }
+
                     if (initialFetch) {
-                        // Start schedule listener only once after house data is fetched
                         listenToSchedules(); 
                     }
                 } else {
-                    // Document does not exist yet, treat as initial setup
                     lastRunTimestamp = 0;
                     bookmarkedScheduleId = null;
-                    // Save initial empty names array (this also creates the house doc)
-                    saveHouseData({ names: houseNames }); 
+                    houseNames = ["", "", ""];
+                    saveHouseData({ names: houseNames, members: [userId] }); 
                 }
                 updateRotationButtonState();
             }, (error) => {
@@ -210,21 +315,17 @@
             });
         }
         
-        /**
-         * Sets up a real-time listener for the latest schedule and history.
-         */
         function listenToSchedules() {
-            // Query for schedules created in the last 30 days, ordered by creation time (newest first)
+            const schedulesColRef = getSchedulesCollectionRef();
+            if (!schedulesColRef) return;
+
             const thirtyDaysAgo = new Date();
             thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
             
-            // NOTE: Firestore queries cannot efficiently filter by 'createdAt' and order by 'desc'
-            // without an index. We use 'limit' and 'orderBy' and then filter/display logic handles 30 days.
-
             const q = query(
-                getSchedulesCollectionRef(),
+                schedulesColRef,
                 orderBy('createdAt', 'desc'),
-                limit(15) // Fetch enough recent schedules to cover history
+                limit(15) 
             );
 
             onSnapshot(q, (snapshot) => {
@@ -233,7 +334,6 @@
                     const schedule = doc.data();
                     const createdAt = schedule.createdAt ? new Date(schedule.createdAt.seconds * 1000) : new Date();
                     
-                    // Filter in memory to strictly enforce 30-day history display
                     if (createdAt.getTime() > thirtyDaysAgo.getTime()) {
                          allSchedules.push({ ...schedule, id: doc.id });
                     }
@@ -247,144 +347,446 @@
             });
         }
 
-        // --- Data Saving Functions ---
+        // --- Data Saving Functions (Unchanged) ---
 
-        /**
-         * Saves or updates the shared house data (names, lastRun, bookmark ID).
-         * @param {Object} data - The data object to save.
-         */
         async function saveHouseData(data) {
+            const houseDocRef = getHouseDocRef();
+            if (!houseDocRef) return;
+
             try {
-                // Use merge to only update the fields provided
-                await setDoc(getHouseDocRef(), {
+                await setDoc(houseDocRef, {
                     ...data,
                     updatedAt: serverTimestamp(),
                     updatedBy: userId,
                 }, { merge: true });
                 
-                // If lastRun was updated, update local state
                 if (data.lastRun) {
                     lastRunTimestamp = Date.now(); 
                 }
-                console.log("House data saved successfully:", data);
             } catch (error) {
                 console.error("Error saving house data:", error);
                 showStatusMessage(`Error saving house data: ${error.message}`, 'bg-red-100 text-red-700');
             }
         }
         
-        /**
-         * Saves the newly created schedule assignments and bookmarks it.
-         * @param {Object[]} assignments - The array of date/name pairs.
-         */
         async function saveScheduleAndBookmark(assignments) {
+            const schedulesColRef = getSchedulesCollectionRef();
+            if (!schedulesColRef) return;
+
             try {
-                // 1. Save the new schedule and get its ID
-                const docRef = await addDoc(getSchedulesCollectionRef(), {
+                const docRef = await addDoc(schedulesColRef, {
                     assignments: assignments,
                     createdAt: serverTimestamp(),
                     createdBy: userId,
                 });
-
-                const newScheduleId = docRef.id;
-
-                // 2. Update the main house document with the new bookmark ID
                 await saveHouseData({ 
-                    bookmarkedScheduleId: newScheduleId,
-                    lastRun: serverTimestamp() // Update the timestamp only on successful run
+                    bookmarkedScheduleId: docRef.id,
+                    lastRun: serverTimestamp()
                 });
-
                 showStatusMessage("New rotation schedule created and set as ACTIVE!", 'bg-green-100 text-green-700');
-
             } catch (error) {
                 console.error("Error saving schedule:", error);
                 showStatusMessage(`Error saving schedule: ${error.message}`, 'bg-red-100 text-red-700');
             }
         }
 
-        /**
-         * Sets a specific schedule as the active/bookmarked one.
-         * @param {string} scheduleId - The ID of the schedule to bookmark.
-         */
         async function bookmarkSchedule(scheduleId) {
             if (bookmarkedScheduleId === scheduleId) {
                 showStatusMessage("That schedule is already active!", 'bg-yellow-100 text-yellow-700');
                 return;
             }
-            
             showStatusMessage("Setting schedule as ACTIVE...", 'bg-blue-100 text-blue-700');
-            try {
-                await saveHouseData({ bookmarkedScheduleId: scheduleId });
-            } catch (error) {
-                showStatusMessage(`Failed to bookmark: ${error.message}`, 'bg-red-100 text-red-700');
-            }
+            await saveHouseData({ bookmarkedScheduleId: scheduleId });
         }
         window.bookmarkSchedule = bookmarkSchedule;
 
-        // --- UI Rendering Functions ---
+        // --- UI Rendering and Auth Functions ---
 
-        /**
-         * Renders the login screen to input the House ID.
-         */
-        function renderLoginScreen() {
+        function renderInitialChoiceScreen(isAuthenticated = false) {
             const contentArea = document.getElementById('content-area');
-            const storedHouseId = localStorage.getItem('rotationTrackerHouseId') || '';
+            const subtext = isAuthenticated 
+                ? `You're signed in as ${auth.currentUser.displayName || auth.currentUser.email}.<br>Now, create or join a house.`
+                : "You'll need an individual account to join or create a house.";
+            
+            document.getElementById('header-subtitle').innerHTML = "Welcome! Create or join a house.";
 
             contentArea.innerHTML = `
                 <div class="max-w-md mx-auto p-6 bg-indigo-50 rounded-xl shadow-lg">
-                    <h2 class="text-xl font-semibold text-indigo-700 mb-4">Enter Shared House ID</h2>
-                    <p class="text-gray-600 mb-4">This acts as your shared house password. All 6 roommates use the same key.</p>
-                    <input type="text" id="house-id-input" placeholder="e.g., bachelors-pad-2024"
-                        class="w-full p-3 border-2 border-indigo-300 rounded-lg focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition duration-150"
-                        value="${storedHouseId}">
-                    
-                    <button onclick="setupHouse(document.getElementById('house-id-input').value)"
-                        class="w-full mt-5 px-4 py-3 bg-green-600 text-white font-bold rounded-lg shadow-md hover:bg-green-700 transition duration-150 ease-in-out">
-                        Access House
-                    </button>
-                    <div class="text-xs text-gray-500 mt-3 text-center">
-                        Your user ID (for troubleshooting): ${userId || '...'}
+                    <p class="text-gray-600 mb-6 text-center">${subtext}</p>
+                    <div class="flex flex-col sm:flex-row gap-4">
+                        <button onclick="handleAuthChoice('create', ${isAuthenticated})"
+                            class="flex-1 px-4 py-3 bg-indigo-600 text-white font-bold rounded-lg shadow-md hover:bg-indigo-700 transition">
+                            Create a House
+                        </button>
+                        <button onclick="handleAuthChoice('join', ${isAuthenticated})"
+                            class="flex-1 px-4 py-3 bg-green-600 text-white font-bold rounded-lg shadow-md hover:bg-green-700 transition">
+                            Join a House
+                        </button>
                     </div>
                 </div>
             `;
         }
+        window.handleAuthChoice = (intent, isAuthenticated) => {
+            if (isAuthenticated) {
+                if (intent === 'create') {
+                    renderCreateHouseScreen();
+                } else {
+                    renderJoinHouseScreen();
+                }
+            } else {
+                renderAuthScreen(intent, 'login');
+            }
+        };
 
-        /**
-         * Renders the main app interface (Name Inputs, Button, Results).
-         */
+        function renderAuthScreen(intent, mode = 'login') {
+            const contentArea = document.getElementById('content-area');
+            const isLogin = mode === 'login';
+            
+            document.getElementById('header-subtitle').textContent = isLogin 
+                ? "Login to your Individual Account" 
+                : "Create an Individual Account";
+
+            contentArea.innerHTML = `
+                <div class="max-w-md mx-auto p-6 bg-gray-50 rounded-xl shadow-lg">
+                    <h2 class="text-xl font-semibold text-indigo-700 mb-4">${isLogin ? 'Sign In' : 'Sign Up'}</h2>
+                    
+                    <button onclick="handleGoogleLogin('${intent}')"
+                        class="w-full mb-4 flex items-center justify-center space-x-3 px-4 py-3 bg-white border border-gray-300 text-gray-700 font-medium rounded-lg shadow-md hover:bg-gray-100 transition">
+                        <svg class="w-5 h-5" viewBox="0 0 48 48">
+                            <path fill="#FFC107" d="M43.61,20.08v-3.7H24v7.71h10.98c-0.67,3.15-2.78,6.88-8.23,6.88c-4.99,0-9.04-4.04-9.04-9.03 c0-4.99,4.05-9.03,9.04-9.03c2.81,0,4.64,1.15,6.01,2.54l2.94-2.88c-1.89-1.82-4.32-3.11-7.05-3.11c-7.83,0-14.16,6.34-14.16,14.16 c0,7.82,6.33,14.16,14.16,14.16c7.09,0,11.83-4.96,11.83-11.58C39.81,24.08,43.61,20.08,43.61,20.08z"/>
+                            <path fill="#FF3D00" d="M10.9,28.87c-0.22-0.67-0.34-1.39-0.34-2.17c0-0.78,0.12-1.5,0.34-2.17l-3.35-2.6 c-0.89,1.74-1.39,3.7-1.39,5.21c0,1.52,0.5,3.47,1.39,5.21L10.9,28.87z"/>
+                            <path fill="#4CAF50" d="M24,44c5.2,0,9.91-1.66,13.88-4.59l-3.35-2.6c-2.3,1.54-4.87,2.58-7.53,2.58 c-7.83,0-14.16-6.34-14.16-14.16c0-7.82,6.33-14.16,14.16-14.16c2.66,0,5.23,1.04,7.53,2.58l3.35-2.6 C33.91,8.34,29.2,6.78,24,6.78c-7.83,0-14.16,6.34-14.16,14.16c0,2.16,0.5,4.12,1.39,5.21L10.9,28.87z"/>
+                            <path fill="#1976D2" d="M43.61,20.08v-3.7H24v7.71h10.98c-0.67,3.15-2.78,6.88-8.23,6.88c-4.99,0-9.04-4.04-9.04-9.03 c0-4.99,4.05-9.03,9.04-9.03c2.81,0,4.64,1.15,6.01,2.54l2.94-2.88c-1.89-1.82-4.32-3.11-7.05-3.11c-7.83,0-14.16,6.34-14.16,14.16 c0,7.82,6.33,14.16,14.16,14.16c7.09,0,11.83-4.96,11.83-11.58C39.81,24.08,43.61,20.08,43.61,20.08z"/>
+                        </svg>
+                        Sign in with Google
+                    </button>
+                    
+                    <div class="text-center mb-4"><span class="text-gray-500">OR</span></div>
+
+                    <div class="space-y-4">
+                        ${!isLogin ? `
+                        <div>
+                            <label for="nickname-input" class="block text-sm font-medium text-gray-700">Nickname</label>
+                            <input type="text" id="nickname-input" placeholder="Your display name"
+                                class="w-full mt-1 p-3 border-2 border-gray-300 rounded-lg focus:border-indigo-500"
+                                required>
+                        </div>
+                        ` : ''}
+                        <div>
+                            <label for="email-input" class="block text-sm font-medium text-gray-700">Email (Gmail)</label>
+                            <input type="email" id="email-input" placeholder="you@gmail.com"
+                                class="w-full mt-1 p-3 border-2 border-gray-300 rounded-lg focus:border-indigo-500"
+                                required>
+                        </div>
+                        <div>
+                            <label for="password-input" class="block text-sm font-medium text-gray-700">Password</label>
+                            <input type="password" id="password-input" placeholder="••••••••"
+                                class="w-full mt-1 p-3 border-2 border-gray-300 rounded-lg focus:border-indigo-500"
+                                required>
+                        </div>
+                    </div>
+                    
+                    <button onclick="${isLogin ? `handleLogin('${intent}')` : `handleSignup('${intent}')`}"
+                        class="w-full mt-6 px-4 py-3 bg-indigo-600 text-white font-bold rounded-lg shadow-md hover:bg-indigo-700 transition">
+                        ${isLogin ? 'Login' : 'Create Account'}
+                    </button>
+                    
+                    <div class="text-center mt-4">
+                        <button onclick="renderAuthScreen('${intent}', '${isLogin ? 'signup' : 'login'}')"
+                            class="text-sm text-indigo-600 hover:underline">
+                            ${isLogin ? 'Need an account? Sign Up' : 'Already have an account? Login'}
+                        </button>
+                    </div>
+                </div>
+            `;
+        }
+        window.renderAuthScreen = renderAuthScreen;
+
+        async function handleGoogleLogin(intent) {
+            const provider = new GoogleAuthProvider();
+            showStatusMessage("Signing in with Google...", 'bg-blue-100 text-blue-700');
+
+            try {
+                const userCredential = await signInWithPopup(auth, provider);
+                const user = userCredential.user;
+                
+                const userDocRef = doc(db, 'users', user.uid);
+                const userDoc = await getDoc(userDocRef);
+
+                if (!userDoc.exists()) {
+                    await setDoc(userDocRef, {
+                        nickname: user.displayName || user.email.split('@')[0],
+                        email: user.email,
+                        createdAt: serverTimestamp()
+                    });
+                }
+                
+                showStatusMessage(`Welcome, ${user.displayName || user.email}!`, 'bg-green-100 text-green-700');
+                
+                const updatedUserDoc = await getDoc(userDocRef); // Re-check doc
+                if (updatedUserDoc.exists() && updatedUserDoc.data().houseUsername) {
+                   await setupHouse(updatedUserDoc.data().houseUsername);
+                } else if (intent === 'create') {
+                    renderCreateHouseScreen();
+                } else {
+                    renderJoinHouseScreen();
+                }
+
+            } catch (error) {
+                console.error("Google Login Error:", error);
+                if (error.code !== 'auth/popup-closed-by-user') {
+                    showStatusMessage(`Google Login Failed: ${error.message}`, 'bg-red-100 text-red-700');
+                } else {
+                     showStatusMessage(`Sign-in cancelled.`, 'bg-yellow-100 text-yellow-700');
+                }
+            }
+        }
+        window.handleGoogleLogin = handleGoogleLogin;
+
+        async function handleLogin(intent) {
+            const email = document.getElementById('email-input').value;
+            const password = document.getElementById('password-input').value;
+            if (!email || !password) {
+                showStatusMessage("Please enter both email and password.", 'bg-yellow-100 text-yellow-700');
+                return;
+            }
+            
+            showStatusMessage("Logging in...", 'bg-blue-100 text-blue-700');
+            try {
+                const userCredential = await signInWithEmailAndPassword(auth, email, password);
+                const user = userCredential.user;
+
+                const userDocRef = doc(db, 'users', user.uid);
+                const userDoc = await getDoc(userDocRef);
+                if (userDoc.exists() && userDoc.data().houseUsername) {
+                   await setupHouse(userDoc.data().houseUsername);
+                } else if (intent === 'create') {
+                    renderCreateHouseScreen();
+                } else {
+                    renderJoinHouseScreen();
+                }
+            } catch (error) {
+                console.error("Login error:", error);
+                showStatusMessage(`Login failed: ${error.message}`, 'bg-red-100 text-red-700');
+            }
+        }
+        window.handleLogin = handleLogin;
+        
+        async function handleSignup(intent) {
+            const email = document.getElementById('email-input').value;
+            const password = document.getElementById('password-input').value;
+            const nickname = document.getElementById('nickname-input').value.trim();
+            
+            if (!email || !password || !nickname) {
+                showStatusMessage("Please fill out all fields.", 'bg-yellow-100 text-yellow-700');
+                return;
+            }
+            if (password.length < 6) {
+                showStatusMessage("Password must be at least 6 characters.", 'bg-yellow-100 text-yellow-700');
+                return;
+            }
+            
+            showStatusMessage("Creating account...", 'bg-blue-100 text-blue-700');
+            try {
+                const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+                const user = userCredential.user;
+                
+                await updateProfile(user, { displayName: nickname });
+                
+                await setDoc(doc(db, 'users', user.uid), {
+                    nickname: nickname,
+                    email: user.email,
+                    createdAt: serverTimestamp()
+                });
+
+                showStatusMessage(`Welcome, ${nickname}!`, 'bg-green-100 text-green-700');
+                if (intent === 'create') {
+                    renderCreateHouseScreen();
+                } else {
+                    renderJoinHouseScreen();
+                }
+                
+            } catch (error) {
+                console.error("Signup error:", error);
+                showStatusMessage(`Signup failed: ${error.message}`, 'bg-red-100 text-red-700');
+            }
+        }
+        window.handleSignup = handleSignup;
+        
+        function renderCreateHouseScreen() {
+            document.getElementById('header-subtitle').textContent = "Set up your new house";
+            const contentArea = document.getElementById('content-area');
+            contentArea.innerHTML = `
+                <div class="max-w-md mx-auto p-6 bg-gray-50 rounded-xl shadow-lg">
+                    <h2 class="text-xl font-semibold text-indigo-700 mb-4">Create a New House</h2>
+                    <div class="space-y-4">
+                        <div>
+                            <label for="house-name-input" class="block text-sm font-medium text-gray-700">House Name</label>
+                            <input type="text" id="house-name-input" placeholder="e.g., The Bachelor Pad"
+                                class="w-full mt-1 p-3 border-2 border-gray-300 rounded-lg focus:border-indigo-500">
+                        </div>
+                        <div>
+                            <label for="house-username-input" class="block text-sm font-medium text-gray-700">House Username (Unique)</label>
+                            <input type="text" id="house-username-input" placeholder="e.g., bachelors-pad-2024 (no spaces, lowercase)"
+                                class="w-full mt-1 p-3 border-2 border-gray-300 rounded-lg focus:border-indigo-500">
+                             <p class="text-xs text-gray-500 mt-1">This is the permanent ID your friends will use to join.</p>
+                        </div>
+                    </div>
+                    <button onclick="handleCreateHouse()"
+                        class="w-full mt-6 px-4 py-3 bg-indigo-600 text-white font-bold rounded-lg shadow-md hover:bg-indigo-700 transition">
+                        Create House
+                    </button>
+                </div>
+            `;
+        }
+        
+        function renderJoinHouseScreen() {
+            document.getElementById('header-subtitle').textContent = "Find your house";
+            const contentArea = document.getElementById('content-area');
+            contentArea.innerHTML = `
+                <div class="max-w-md mx-auto p-6 bg-gray-50 rounded-xl shadow-lg">
+                    <h2 class="text-xl font-semibold text-indigo-700 mb-4">Join an Existing House</h2>
+                    <div class="space-y-4">
+                        <div>
+                            <label for="house-username-input" class="block text-sm font-medium text-gray-700">House Username</label>
+                            <input type="text" id="house-username-input" placeholder="Enter the house's unique username"
+                                class="w-full mt-1 p-3 border-2 border-gray-300 rounded-lg focus:border-indigo-500">
+                        </div>
+                    </div>
+                    <button onclick="handleJoinHouse()"
+                        class="w-full mt-6 px-4 py-3 bg-green-600 text-white font-bold rounded-lg shadow-md hover:bg-green-700 transition">
+                        Join House
+                    </button>
+                </div>
+            `;
+        }
+        
+        async function handleCreateHouse() {
+            const houseName = document.getElementById('house-name-input').value.trim();
+            const inputUsername = document.getElementById('house-username-input').value.trim().toLowerCase();
+            
+            if (!houseName || !inputUsername) {
+                showStatusMessage("Please fill out both fields.", 'bg-yellow-100 text-yellow-700');
+                return;
+            }
+            if (/\s/.test(inputUsername) || inputUsername.length < 4) {
+                showStatusMessage("House Username must be at least 4 characters and contain no spaces.", 'bg-yellow-100 text-yellow-700');
+                return;
+            }
+            
+            showStatusMessage("Creating house...", 'bg-blue-100 text-blue-700');
+            
+            const houseDocRef = doc(db, 'houses', inputUsername);
+            const userDocRef = getUserDocRef();
+
+            try {
+                await runTransaction(db, async (transaction) => {
+                    const houseDoc = await transaction.get(houseDocRef);
+                    if (houseDoc.exists()) {
+                        throw new Error("This house username is already taken. Please try another.");
+                    }
+                    
+                    transaction.set(houseDocRef, {
+                        houseName: houseName,
+                        ownerId: userId,
+                        members: [userId],
+                        names: ["", "", ""], 
+                        createdAt: serverTimestamp()
+                    });
+                    
+                    transaction.update(userDocRef, {
+                        houseUsername: inputUsername
+                    });
+                });
+                
+                await setupHouse(inputUsername);
+
+            } catch (error) {
+                console.error("House creation failed:", error);
+                showStatusMessage(`Error: ${error.message}`, 'bg-red-100 text-red-700');
+            }
+        }
+        window.handleCreateHouse = handleCreateHouse;
+        
+        async function handleJoinHouse() {
+            const inputUsername = document.getElementById('house-username-input').value.trim().toLowerCase();
+            if (!inputUsername) {
+                showStatusMessage("Please enter a house username.", 'bg-yellow-100 text-yellow-700');
+                return;
+            }
+            
+            showStatusMessage("Joining house...", 'bg-blue-100 text-blue-700');
+            
+            const houseDocRef = doc(db, 'houses', inputUsername);
+            const userDocRef = getUserDocRef();
+
+            try {
+                await runTransaction(db, async (transaction) => {
+                    const houseDoc = await transaction.get(houseDocRef);
+                    if (!houseDoc.exists()) {
+                        throw new Error("House not found. Check the username and try again.");
+                    }
+                    
+                    transaction.update(houseDocRef, {
+                        members: arrayUnion(userId)
+                    });
+                    
+                    transaction.update(userDocRef, {
+                        houseUsername: inputUsername
+                    });
+                });
+                
+                await setupHouse(inputUsername);
+
+            } catch (error) {
+                console.error("House joining failed:", error);
+                showStatusMessage(`Error: ${error.message}`, 'bg-red-100 text-red-700');
+            }
+        }
+        window.handleJoinHouse = handleJoinHouse;
+
         function renderMainApp() {
             const contentArea = document.getElementById('content-area');
             contentArea.innerHTML = `
                 <div class="mb-8 p-5 bg-indigo-50 rounded-xl shadow-inner">
-                    <h2 class="text-xl font-semibold text-indigo-700 mb-4 flex items-center">
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 mr-2">
-                          <path stroke-linecap="round" stroke-linejoin="round" d="M18 18.72a4.5 4.5 0 0 0-.977-2.09L15 13.75l-4.72 2.09A4.5 4.5 0 0 0 9.977 18.72M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0ZM10.5 8.25a1.5 1.5 0 1 0-3 0 1.5 1.5 0 0 0 3 0Zm-1.5 4.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z" />
-                        </svg>
-                        The 6 Roommates (Saved)
-                    </h2>
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="text-xl font-semibold text-indigo-700 flex items-center">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 mr-2">
+                              <path stroke-linecap="round" stroke-linejoin="round" d="M18 18.72a4.5 4.5 0 0 0-.977-2.09L15 13.75l-4.72 2.09A4.5 4.5 0 0 0 9.977 18.72M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0ZM10.5 8.25a1.5 1.5 0 1 0-3 0 1.5 1.5 0 0 0 3 0Zm-1.5 4.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z" />
+                            </svg>
+                            Rotation Names
+                        </h2>
+                        <button onclick="openMembersModal()"
+                            class="px-3 py-1 text-sm bg-indigo-200 text-indigo-800 rounded-full font-medium hover:bg-indigo-300 transition">
+                            View Members
+                        </button>
+                    </div>
+                    
                     <div id="names-grid" class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <!-- Name inputs go here -->
-                    </div>
-                    <div id="name-error-message" class="mt-4 text-sm text-red-600 font-medium hidden">
-                        Please enter a unique name for all 6 spots before running the rotation.
-                    </div>
-                    <button onclick="saveCurrentNames()"
-                        class="w-full mt-4 px-4 py-2 bg-gray-200 text-gray-700 font-medium rounded-lg hover:bg-gray-300 transition duration-150">
-                        Update Roommate Names
+                        </div>
+                    
+                    <button onclick="useMembersForRotation()"
+                        class="w-full mt-4 px-4 py-2 bg-indigo-200 text-indigo-700 font-medium rounded-lg hover:bg-indigo-300 transition">
+                        Use House Members for Rotation
                     </button>
+
+                    <button onclick="saveCurrentNames()"
+                        class="w-full mt-4 px-4 py-2 bg-gray-200 text-gray-700 font-medium rounded-lg hover:bg-gray-300 transition">
+                        Update Rotation Slots & Names
+                    </button>
+                    
+                    <div id="name-error-message" class="mt-4 text-sm text-red-600 font-medium hidden"></div>
                 </div>
 
-                <!-- Action Button -->
                 <div class="flex justify-center mb-8">
                     <button id="assign-button" onclick="initiateRotation()"
-                        class="w-full sm:w-auto px-8 py-3 bg-indigo-600 text-white font-bold text-lg rounded-full shadow-lg hover:bg-indigo-700 active:bg-indigo-800 transition duration-150 ease-in-out focus:outline-none focus:ring-4 focus:ring-indigo-300 disabled:bg-indigo-400 disabled:shadow-none"
+                        class="w-full sm:w-auto px-8 py-3 bg-indigo-600 text-white font-bold text-lg rounded-full shadow-lg hover:bg-indigo-700 active:bg-indigo-800 transition"
                         disabled>
                         <span id="button-text">RUN NEW ROTATION!</span>
                         <span id="loading-spinner" class="spinner hidden"></span>
                     </button>
                 </div>
 
-                <!-- Active Schedule Section -->
                 <div id="results-container" class="mt-6">
                     <h2 class="text-2xl font-bold text-gray-800 mb-4 text-center">ACTIVE Rotation Schedule</h2>
                     <div id="assignment-list" class="space-y-3 p-4 border rounded-xl bg-yellow-50 border-yellow-200 min-h-[100px] flex items-center justify-center text-gray-500">
@@ -397,49 +799,92 @@
                     </div>
                 </div>
             `;
-            // Populate inputs after the main app structure is rendered
             updateNameInputs();
         }
+        
+        function openMembersModal() {
+            const modal = document.getElementById('members-modal');
+            const listContainer = document.getElementById('members-list-container');
+            
+            if (houseMembersList.length > 0) {
+                listContainer.innerHTML = houseMembersList.map(nickname => `
+                    <div class="p-3 bg-gray-100 rounded-lg">
+                        <span class="font-medium text-gray-800">${nickname}</span>
+                    </div>
+                `).join('');
+            } else {
+                listContainer.innerHTML = '<p class="text-gray-500">No members found or still loading...</p>';
+            }
+            
+            modal.classList.remove('hidden');
+        }
+        window.openMembersModal = openMembersModal;
+        
+        function closeMembersModal() {
+            document.getElementById('members-modal').classList.add('hidden');
+        }
+        window.closeMembersModal = closeMembersModal;
 
-        /**
-         * Populates name inputs with saved data or updates local state from inputs.
-         */
         function updateNameInputs() {
             const namesGrid = document.getElementById('names-grid');
             if (!namesGrid) return;
             
-            namesGrid.innerHTML = ''; // Clear existing inputs
-            for (let i = 0; i < NUM_PEOPLE; i++) {
-                const nameValue = houseNames[i] || "";
+            namesGrid.innerHTML = '';
+            
+            houseNames.forEach((nameValue, index) => {
                 namesGrid.innerHTML += `
-                    <div class="relative">
-                        <input type="text" id="name${i}" placeholder="Roommate ${i + 1}"
-                            class="name-input w-full p-3 border-2 border-indigo-300 rounded-lg focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition duration-150"
-                            value="${nameValue}">
+                    <div class="relative flex items-center space-x-2">
+                        <input type="text" id="name${index}" placeholder="Rotation Slot ${index + 1}"
+                            class="name-input w-full p-3 border-2 border-indigo-300 rounded-lg focus:border-indigo-500"
+                            value="${nameValue || ""}">
+                        <button onclick="removeRotationSlot(${index})" title="Remove Slot"
+                            class="p-1 bg-red-100 text-red-600 rounded-full hover:bg-red-200 transition">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-5 h-5">
+                              <path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z" />
+                            </svg>
+                        </button>
                     </div>
                 `;
-            }
+            });
 
-            // Attach event listeners to update local state on change (optional, since we use saveCurrentNames button)
+            namesGrid.innerHTML += `
+                <button onclick="addRotationSlot()" 
+                    class="w-full p-3 border-2 border-dashed border-indigo-300 text-indigo-600 font-medium rounded-lg hover:bg-indigo-100 transition">
+                    + Add Rotation Slot
+                </button>
+            `;
+
             document.querySelectorAll('.name-input').forEach((input, index) => {
                 input.addEventListener('input', (e) => {
-                    // This updates local state but requires 'Update Roommate Names' button to save to DB
                     houseNames[index] = e.target.value.trim();
                 });
             });
         }
         
-        /**
-         * Renders the currently active (bookmarked) schedule.
-         */
+        function addRotationSlot() {
+            houseNames.push("");
+            updateNameInputs();
+        }
+        window.addRotationSlot = addRotationSlot;
+
+        function removeRotationSlot(index) {
+            if (houseNames.length <= 2) {
+                showStatusMessage("Must have at least 2 rotation slots.", 'bg-yellow-100 text-yellow-700');
+                return;
+            }
+            houseNames.splice(index, 1);
+            updateNameInputs();
+        }
+        window.removeRotationSlot = removeRotationSlot;
+        
         function renderActiveSchedule() {
             const assignmentList = document.getElementById('assignment-list');
             if (!assignmentList) return;
 
             const activeSchedule = allSchedules.find(s => s.id === bookmarkedScheduleId);
 
-            if (!activeSchedule) {
-                assignmentList.innerHTML = '<div class="text-center p-4">No schedule has been set as active yet. Select one from the history below or run a new rotation!</div>';
+            if (!activeSchedule || !activeSchedule.assignments) {
+                assignmentList.innerHTML = '<div class="text-center p-4">No schedule has been set as active yet.</div>';
                 assignmentList.classList.remove('bg-green-50', 'border-green-200');
                 assignmentList.classList.add('bg-yellow-50', 'border-yellow-200');
                 return;
@@ -456,7 +901,7 @@
                     <div class="p-4 flex flex-col md:flex-row justify-between items-start md:items-center 
                                 rounded-xl border-l-4 ${period.border} ${period.color} shadow-md">
                         <div class="mb-2 md:mb-0">
-                            <p class="text-sm font-medium text-gray-500">Dates</p>
+                            <p class="text-sm font-medium text-gray-500">Dates/Slot</p>
                             <span class="text-xl font-bold text-gray-800">${item.range}</span>
                         </div>
                         <div class="text-right">
@@ -469,15 +914,12 @@
             assignmentList.innerHTML = assignmentsHTML;
         }
 
-        /**
-         * Renders the schedule history list, including bookmarking options.
-         */
         function renderScheduleHistory() {
             const historyList = document.getElementById('history-list');
             if (!historyList) return;
 
             if (allSchedules.length === 0) {
-                historyList.innerHTML = '<div class="text-center text-gray-500 p-2">No rotation history available in the last 30 days.</div>';
+                historyList.innerHTML = '<div class="text-center text-gray-500 p-2">No rotation history available.</div>';
                 return;
             }
 
@@ -488,8 +930,9 @@
                 const creator = schedule.createdBy === userId ? 'You' : 'Another Roommate';
                 const isActive = schedule.id === bookmarkedScheduleId;
 
-                // Get the name assigned to the 1st-5th range for a simple summary
-                const firstAssignment = schedule.assignments.find(a => a.range === '1st - 5th')?.name || 'N/A';
+                const firstAssignment = (schedule.assignments && schedule.assignments[0])
+                    ? `${schedule.assignments[0].name} (${schedule.assignments[0].range})`
+                    : 'N/A';
                 
                 historyHTML += `
                     <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center p-3 bg-white border border-gray-300 rounded-lg shadow-sm">
@@ -513,9 +956,6 @@
             historyList.innerHTML = historyHTML;
         }
 
-        /**
-         * Updates the rotation button's text and disabled state based on the 24-hour limit.
-         */
         function updateRotationButtonState() {
             const button = document.getElementById('assign-button');
             const buttonText = document.getElementById('button-text');
@@ -524,17 +964,25 @@
             const timeSinceLastRun = Date.now() - lastRunTimestamp;
             const timeLeft = ONE_DAY_MS - timeSinceLastRun;
             
-            // Check if the names array is valid (6 unique non-empty names)
             const enteredNames = houseNames.filter(name => name.length > 0);
-            const validNames = enteredNames.length === NUM_PEOPLE && new Set(enteredNames).size === NUM_PEOPLE;
+            const validNames = houseNames.length >= 2 && 
+                               enteredNames.length === houseNames.length && 
+                               new Set(enteredNames).size === houseNames.length;
             
+            const errorDiv = document.getElementById('name-error-message');
+
             if (!validNames) {
                 button.disabled = true;
-                buttonText.textContent = 'Enter All 6 Names Above!';
-                document.getElementById('name-error-message')?.classList.remove('hidden');
+                buttonText.textContent = 'Fill All Rotation Spots!';
+                if (errorDiv) {
+                    errorDiv.textContent = `Please enter a unique name for all ${houseNames.length} spots. (Min 2 required)`;
+                    errorDiv.classList.remove('hidden');
+                }
                 return;
             } else {
-                document.getElementById('name-error-message')?.classList.add('hidden');
+                if (errorDiv) {
+                    errorDiv.classList.add('hidden');
+                }
             }
 
             if (timeLeft > 0 && lastRunTimestamp !== 0) {
@@ -545,7 +993,6 @@
                 const seconds = Math.floor((timeLeft % (1000 * 60)) / 1000);
                 buttonText.textContent = `Wait: ${hours}h ${minutes}m ${seconds}s`;
                 
-                // Set a timeout to update the countdown
                 setTimeout(updateRotationButtonState, 1000);
 
             } else {
@@ -555,9 +1002,6 @@
             }
         }
         
-        /**
-         * Utility to display temporary status messages.
-         */
         function showStatusMessage(message, classes) {
             const statusDiv = document.getElementById('status-message');
             if (statusDiv) {
@@ -570,7 +1014,6 @@
 
         // --- Core Application Logic ---
 
-        const NUM_PEOPLE = 6;
         const dateRanges = [
             { range: "1st - 5th", color: "bg-green-100", border: "border-green-400" },
             { range: "6th - 10th", color: "bg-yellow-100", border: "border-yellow-400" },
@@ -580,74 +1023,76 @@
             { range: "26th - 30th", color: "bg-indigo-100", border: "border-indigo-400" }
         ];
 
-        /**
-         * Saves names from input fields to the database.
-         */
         function saveCurrentNames() {
-            let namesFromInput = [];
-            const inputElements = document.querySelectorAll('.name-input');
-            inputElements.forEach(input => {
-                namesFromInput.push(input.value.trim());
-            });
+            const namesFromInput = houseNames.map(name => name.trim());
             
-            const uniqueNames = new Set(namesFromInput.filter(name => name.length > 0));
+            if (namesFromInput.length < 2) {
+                showStatusMessage("Error: Must have at least 2 rotation slots.", 'bg-red-100 text-red-700');
+                return;
+            }
+            
+            const filledNames = namesFromInput.filter(name => name.length > 0);
+            const uniqueNames = new Set(filledNames);
 
-            if (namesFromInput.length !== NUM_PEOPLE || uniqueNames.size !== NUM_PEOPLE) {
-                showStatusMessage("Error: Must enter 6 unique names to save.", 'bg-red-100 text-red-700');
+            if (filledNames.length !== namesFromInput.length || uniqueNames.size !== filledNames.length) {
+                showStatusMessage("Error: Must enter a unique name for every slot to save.", 'bg-red-100 text-red-700');
                 return;
             }
 
-            // Update local state and save to firestore
             houseNames = namesFromInput; 
             saveHouseData({ names: houseNames });
-            showStatusMessage("Names updated and saved for the whole house!", 'bg-green-100 text-green-700');
+            showStatusMessage("Rotation slots and names updated for the whole house!", 'bg-green-100 text-green-700');
         }
         window.saveCurrentNames = saveCurrentNames;
+        
+        function useMembersForRotation() {
+            if (houseMembersList.length < 2) {
+                showStatusMessage("Not enough house members to populate. (Minimum 2)", 'bg-yellow-100 text-yellow-700');
+                return;
+            }
+            
+            houseNames = [...houseMembersList];
+            updateNameInputs();
+            
+            showStatusMessage("Rotation slots updated with house members. Click 'Update Rotation Slots & Names' to save.", 'bg-blue-100 text-blue-700');
+        }
+        window.useMembersForRotation = useMembersForRotation;
 
 
-        /**
-         * Initiates the randomization process and saves the result.
-         */
         async function initiateRotation() {
             const button = document.getElementById('assign-button');
             
-            // Check validation again
             const enteredNames = houseNames.filter(name => name.length > 0);
             const uniqueNames = new Set(enteredNames);
             
-            if (enteredNames.length !== NUM_PEOPLE || uniqueNames.size !== NUM_PEOPLE) {
-                showStatusMessage("Error: 6 unique names are required to run the rotation.", 'bg-red-100 text-red-700');
+            if (houseNames.length < 2 || enteredNames.length !== houseNames.length || uniqueNames.size !== houseNames.length) {
+                showStatusMessage(`Error: ${houseNames.length} unique names are required to run the rotation.`, 'bg-red-100 text-red-700');
                 return;
             }
 
             const buttonText = document.getElementById('button-text');
             const loadingSpinner = document.getElementById('loading-spinner');
             
-            // Prevent double-click and show loading
             button.disabled = true;
             buttonText.textContent = 'Running...';
             loadingSpinner.classList.remove('hidden');
 
             try {
-                // 1. Shuffle the names
                 const shuffledNames = shuffle([...houseNames]);
 
-                // 2. Create the assignments list
                 const assignments = shuffledNames.map((name, index) => ({
-                    range: dateRanges[index].range,
+                    range: dateRanges[index] ? dateRanges[index].range : `Rotation Slot ${index + 1}`,
                     name: name
                 }));
 
-                // 3. Save the new schedule and automatically bookmark it, and update the timestamp
                 await saveScheduleAndBookmark(assignments);
                 
             } catch (error) {
                 console.error("Rotation initiation failed:", error);
                 showStatusMessage(`Rotation failed: ${error.message}`, 'bg-red-100 text-red-700');
             } finally {
-                // Restore button state
                 loadingSpinner.classList.add('hidden');
-                updateRotationButtonState(); // Re-check cooldown
+                updateRotationButtonState();
             }
         }
         window.initiateRotation = initiateRotation;
@@ -666,6 +1111,8 @@
         }
 
         // --- Bootstrap ---
+        // This will run the initializeFirebase function after the page (and the config in the head)
+        // has finished loading.
         window.onload = initializeFirebase;
 
     </script>
